@@ -168,6 +168,15 @@ class NuScenesPointCloud:
         return torch.from_numpy(np.load(file)["data"].astype(np.uint8))
 
     @classmethod
+    def _load_full_size_occupancy(cls, path: str) -> Tensor:
+        points = torch.from_numpy(np.load(path)).t()
+        voxel = torch.zeros(512, 512, 64, dtype=torch.long)
+        voxel[points[2].long(), points[1].long(), points[0].long()] = points[3].type(torch.long) + 1
+        voxel = voxel > 0
+        voxel = voxel[None, None, ...]
+        return voxel
+
+    @classmethod
     def _load_occupancy(cls, path: str) -> Tensor:
         points = torch.from_numpy(np.load(path)).t()
         voxel = torch.zeros(512, 512, 64, dtype=torch.long)
@@ -305,7 +314,7 @@ class NuScenesOccupancyDataset(Dataset):
         return len(self._paths)
 
     def __getitem__(self, index: int):
-        return NuScenesPointCloud._load_occupancy(self._paths[index])[2][0]
+        return NuScenesPointCloud._load_full_size_occupancy(self._paths[index])[0]
 
 
 class NuScenesDataset(Dataset):
