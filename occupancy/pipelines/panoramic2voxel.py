@@ -336,17 +336,17 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             image_autoencoderkl_model_id, torch_dtype=torch.bfloat16, torchscript=True, device_map="auto"
         )
         self.image_encoder = VisionTransformerFeatureExtractor(
-            self.image_autoencoderkl.config.latent_channels, 128, 512, 2, 6, 128
+            self.image_autoencoderkl.config.latent_channels, 256, 1024, 2, 6, 128
         )
         self.plane2polar = UnetPlane2Polar(
-            4, self.voxel_encoder_latent_dim * 2, self.plane2polar_depth_channels, 128, 3, 512, 6
+            4, self.voxel_encoder_latent_dim * 2, self.plane2polar_depth_channels, 128, 3, 1024, 6
         )
         self.decoder = UnetConditionalAttention3d(
             self.voxel_encoder_latent_dim * 2,
             self.voxel_encoder_latent_dim * 2,
-            512,
-            512,
-            128,
+            1024,
+            1024,
+            256,
             2,
             2,
             4,
