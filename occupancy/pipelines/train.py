@@ -125,8 +125,8 @@ def train(
             model.parameters(),
             AdamW,
             lr=args.lr,
-            weight_decay=1e-5,
-            betas=(0.9, 0.96),
+            weight_decay=args.weight_decay,
+            betas=(0.9, 0.996),
             eps=1e-8,
             parameters_as_bucket_view=True,
         )
@@ -134,8 +134,8 @@ def train(
         optimizer = AdamW(
             model.parameters(),
             lr=args.lr,
-            weight_decay=1e-5,
-            betas=(0.9, 0.96),
+            weight_decay=args.weight_decay,
+            betas=(0.9, 0.996),
             eps=1e-8,
         )
     total_steps = 2 * len(dl) // args.grad_accum
@@ -223,6 +223,7 @@ if __name__ == "__main__":
     parser.add_argument("--weight-decay", type=float, default=1e-5)
     parser.add_argument("--total-epochs", type=int, default=100)
     parser.add_argument("--num-classes", type=int, default=1)
+
     args = parser.parse_args()
     match args.dtype:
         case "bf16":

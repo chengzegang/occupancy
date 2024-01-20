@@ -339,11 +339,11 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             self.image_autoencoderkl.config.latent_channels, 256, 1024, 2, 6, 128
         )
         self.plane2polar = UnetPlane2Polar(
-            4, self.voxel_encoder_latent_dim * 2, self.plane2polar_depth_channels, 128, 3, 1024, 6
+            4, self.voxel_encoder_latent_dim * 2, self.plane2polar_depth_channels, 128, 3, 1024, 8
         )
         self.decoder = UnetConditionalAttention3d(
             self.voxel_encoder_latent_dim * 2,
-            self.voxel_encoder_latent_dim * 2,
+            self.voxel_encoder_latent_dim,
             1024,
             1024,
             256,
@@ -377,7 +377,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
     def prepare_multiview(self, images, voxel_shape) -> Tensor:
         batch_size = images.shape[0]
         num_images = images.shape[1]
-        images = images[:, torch.randperm(num_images)]
+        # images = images[:, torch.randperm(num_images)]
         with torch.no_grad():
             multiview_sample = self.prepare_image(images.flatten(0, 1))
         multiview_features = self.image_encoder(multiview_sample)
@@ -450,21 +450,22 @@ class MultiViewImageToVoxelPipeline(nn.Module):
                 input.images.data = self.image_augmentation(input.images.data.float()).type_as(input.images.data)
 
         multiview_voxel, multiview_sample = self.prepare_multiview(input.images, (32, 32, 4))
-        model_dist = self.decoder(multiview_voxel, multiview_sample)
-        model_dist = GaussianDistribution.from_latent(model_dist, latent_scale=self.voxel_autoencoderkl.latent_scale)
-        model_output = model_dist.sample()
+        model_output = self.decoder(multiview_voxel, multiview_sample)
+        # model_dist = GaussianDistribution.from_latent(model_dist, latent_scale=self.voxel_autoencoderkl.latent_scale)
+        # model_output = model_dist.sample()
 
         voxel = input.voxel
         pred_voxel = self.voxel_autoencoderkl.decode(model_output)
+        # with torch.no_grad():
+        #    gt_voxel_dist = self.voxel_autoencoderkl.encode(voxel)
         # with torch.no_grad():
         # pred_voxel = self.decode_latent_sample(model_output, input.voxel.shape[-3:])
         # loss, pos_weight = self.random_sample_voxel(model_output, voxel)
         pos_weight = self.influence_radial_weight(voxel)
         loss = (
             F.binary_cross_entropy_with_logits(pred_voxel, voxel, pos_weight=pos_weight)
-            + 0.001 * model_dist.kl_loss.mean()
+            # + 0.001 * model_dist.kl_div(gt_voxel_dist).mean()
         )
-
         return MultiViewImageToVoxelPipelineOutput(
             pred_voxel,
             voxel,

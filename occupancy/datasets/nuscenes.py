@@ -184,7 +184,7 @@ class NuScenesPointCloud:
         points_[0] /= 20
         points_[1] /= 256
         points_[2] /= 256
-        obs_ind = ops.filter_observable(points_[[2, 1, 0]], 0.5)
+        obs_ind = ops.filter_observable(points_[[2, 1, 0]], 1)
         obs_points = points[:, obs_ind]
 
         obs_voxel = torch.zeros(512, 512, 64, dtype=torch.long)
