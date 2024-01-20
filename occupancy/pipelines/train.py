@@ -179,7 +179,7 @@ def train(
                 pbar.set_description(f"Loss: {mean_loss.item():.4f}, LR: {scheduler.get_last_lr()[0]:.3e}")
                 if step % args.save_every == 0 and torch.isfinite(mean_loss) and local_rank == 0:
                     fig = output.figure
-                    fig.savefig("output.png")
+                    fig.savefig(f"{args.model_name}.png")
                     run.log({"output": wandb.Image(fig)}, step=step)
                     plt.close(fig)
                     model.eval()
