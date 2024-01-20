@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "occupancy"
+dynamic = ["version"]
+description = 'A deep learning detection toolkit that consistently follows PyTorch conventions.'
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+keywords = []
+authors = [
+  { name = "Zegang Cheng", email = "20091803+chengzegang@users.noreply.github.com" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+]
+
+
+dependencies = [
+  "torch",
+  "torchvision",
+  "roma",
+  "numpy",
+  "scipy",
+  "tensordict",
+  "Pillow",
+  "matplotlib",
+  "spconv-cu120",
+  "nuscenes-devkit",
+  "timm",
+  "transformers",
+  "diffusers",
+]
+
+
+[project.urls]
+Documentation = "https://github.com/chengzegang/occupancy#readme"
+Issues = "https://github.com/chengzegang/occupancy/issues"
+Source = "https://github.com/chengzegang/occupancy"
+
+[tool.hatch.version]
+path = "occupancy/__about__.py"
+
+[tool.hatch.envs.default]
+dependencies = ["coverage[toml]>=6.5", "pytest", 'mypy']
+
+
+[tool.hatch.envs.default.scripts]
+check = "mypy --install-types --non-interactive {args:src/occupancy tests}"
+
+[tool.hatch.metadata]
+allow-direct-references = true
