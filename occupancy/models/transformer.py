@@ -10,8 +10,8 @@ import torch._dynamo
 
 
 @torch.jit.script
-def fused_rmsnorm(x: Tensor, weight: Tensor, eps: float = 1e-5) -> Tensor:
-    x = x * torch.rsqrt((x**2).mean(dim=-1, keepdim=True) + eps) * weight
+def fused_rmsnorm(x: Tensor, weight: Tensor, bias: Tensor, eps: float = 1e-5) -> Tensor:
+    x = x * torch.rsqrt((x**2).mean(dim=-1, keepdim=True) + eps) * weight + bias
     return x
 
 
@@ -21,9 +21,10 @@ class RMSNorm(nn.Module):
         self.hidden_size = hidden_size
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(hidden_size, dtype=torch.bfloat16))
+        self.bias = nn.Parameter(torch.zeros(hidden_size, dtype=torch.bfloat16))
 
     def forward(self, x: Tensor) -> Tensor:
-        return fused_rmsnorm(x, self.weight, self.eps)  # eps of bfloat16
+        return fused_rmsnorm(x, self.weight, self.bias, self.eps)  # eps of bfloat16
 
 
 @torch.jit.script
@@ -46,9 +47,21 @@ class SwiGLU(nn.Module):
         super().__init__()
         out_features = out_features or in_features
 
-        self.w1 = nn.Linear(in_features, hidden_features, dtype=torch.bfloat16, bias=False)
-        self.w2 = nn.Linear(in_features, hidden_features, dtype=torch.bfloat16, bias=False)
-        self.w3 = nn.Linear(hidden_features, out_features, dtype=torch.bfloat16, bias=False)
+        self.w1 = nn.Linear(
+            in_features,
+            hidden_features,
+            dtype=torch.bfloat16,
+        )
+        self.w2 = nn.Linear(
+            in_features,
+            hidden_features,
+            dtype=torch.bfloat16,
+        )
+        self.w3 = nn.Linear(
+            hidden_features,
+            out_features,
+            dtype=torch.bfloat16,
+        )
         self.hidden_features = hidden_features
         self.out_features = out_features
         self.in_features = in_features
@@ -116,10 +129,26 @@ class Attention(nn.Module):
         self.num_heads = num_heads
         self.head_size = head_size
 
-        self.q_proj = nn.Linear(hidden_states, num_heads * head_size, dtype=torch.bfloat16, bias=False)
-        self.k_proj = nn.Linear(hidden_states, num_heads * head_size, dtype=torch.bfloat16, bias=False)
-        self.v_proj = nn.Linear(hidden_states, num_heads * head_size, dtype=torch.bfloat16, bias=False)
-        self.out_proj = nn.Linear(num_heads * head_size, hidden_states, dtype=torch.bfloat16, bias=False)
+        self.q_proj = nn.Linear(
+            hidden_states,
+            num_heads * head_size,
+            dtype=torch.bfloat16,
+        )
+        self.k_proj = nn.Linear(
+            hidden_states,
+            num_heads * head_size,
+            dtype=torch.bfloat16,
+        )
+        self.v_proj = nn.Linear(
+            hidden_states,
+            num_heads * head_size,
+            dtype=torch.bfloat16,
+        )
+        self.out_proj = nn.Linear(
+            num_heads * head_size,
+            hidden_states,
+            dtype=torch.bfloat16,
+        )
         self.rotary = RotaryEmbedding(head_size)
 
     def forward(self, input_embeds: Tensor, attention_mask: Optional[Tensor] = None, is_causal: bool = False) -> Tensor:
@@ -149,10 +178,26 @@ class CrossAttention(nn.Module):
         self.num_heads = num_heads
         self.head_size = head_size
 
-        self.q_proj = nn.Linear(hidden_states, num_heads * head_size, dtype=torch.bfloat16, bias=False)
-        self.k_proj = nn.Linear(hidden_states, num_heads * head_size, dtype=torch.bfloat16, bias=False)
-        self.v_proj = nn.Linear(hidden_states, num_heads * head_size, dtype=torch.bfloat16, bias=False)
-        self.out_proj = nn.Linear(num_heads * head_size, hidden_states, dtype=torch.bfloat16, bias=False)
+        self.q_proj = nn.Linear(
+            hidden_states,
+            num_heads * head_size,
+            dtype=torch.bfloat16,
+        )
+        self.k_proj = nn.Linear(
+            hidden_states,
+            num_heads * head_size,
+            dtype=torch.bfloat16,
+        )
+        self.v_proj = nn.Linear(
+            hidden_states,
+            num_heads * head_size,
+            dtype=torch.bfloat16,
+        )
+        self.out_proj = nn.Linear(
+            num_heads * head_size,
+            hidden_states,
+            dtype=torch.bfloat16,
+        )
         self.rotary = RotaryEmbedding(head_size)
 
     def forward(

@@ -11,10 +11,24 @@ class UnetConvolution3d(nn.Module):
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
         self.norm1 = SpatialRMSNorm(in_channels)
-        self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.conv1 = nn.Conv3d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+        )
         self.norm2 = SpatialRMSNorm(out_channels)
-        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.shorcut = nn.Conv3d(in_channels, out_channels, kernel_size=1, bias=False)
+        self.conv2 = nn.Conv3d(
+            out_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+        )
+        self.shorcut = nn.Conv3d(
+            in_channels,
+            out_channels,
+            kernel_size=1,
+        )
         self.nonlinear = nn.SiLU(True)
 
     def forward(self, input_embeds: Tensor) -> Tensor:
@@ -66,7 +80,12 @@ class UnetAttentionEncoderLayer3d(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, num_heads: int, head_size: int):
         super().__init__()
         self.convolution = UnetConvolution3d(in_channels, out_channels)
-        self.downsample = nn.Conv3d(out_channels, out_channels, kernel_size=2, stride=2, bias=False)
+        self.downsample = nn.Conv3d(
+            out_channels,
+            out_channels,
+            kernel_size=2,
+            stride=2,
+        )
         self.attention = Attention3d(out_channels, num_heads, head_size)
 
     def forward(self, input_embeds: Tensor) -> Tensor:
@@ -110,7 +129,11 @@ class UnetAttentionEncoder3d(nn.Module):
         self.out_attention = Attention3d(_out_channels[-1], _out_channels[-1] // head_size, head_size)
 
         self.out_norm = SpatialRMSNorm(_out_channels[-1])
-        self.out_conv = nn.Conv3d(_out_channels[-1], latent_dim, kernel_size=1, bias=False)
+        self.out_conv = nn.Conv3d(
+            _out_channels[-1],
+            latent_dim,
+            kernel_size=1,
+        )
         self.nonlinear = nn.SiLU(True)
 
     def forward(self, input_embeds: Tensor) -> Tuple[Tensor, List[Tensor]]:
@@ -136,7 +159,10 @@ class ConditionalAttention3d(nn.Module):
         self.self_attn = Attention(hidden_size, num_heads, head_size)
 
         self.ln2 = RMSNorm(hidden_size)
-        self.c_proj = nn.Linear(condition_size, hidden_size, bias=False)
+        self.c_proj = nn.Linear(
+            condition_size,
+            hidden_size,
+        )
         self.c_norm = RMSNorm(hidden_size)
         self.cross_attn = CrossAttention(hidden_size, num_heads, head_size)
 
@@ -177,11 +203,15 @@ class UnetAttentionDecoderLayer3d(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, num_heads: int, head_size: int):
         super().__init__()
         self.attention = Attention3d(in_channels * 2, num_heads, head_size)
-        self.upsample = nn.ConvTranspose3d(in_channels * 2, out_channels, kernel_size=2, stride=2, bias=False)
+        self.upsample = nn.ConvTranspose3d(
+            in_channels * 2,
+            out_channels,
+            kernel_size=2,
+            stride=2,
+        )
         self.convolution = UnetConvolution3d(out_channels, out_channels)
 
     def forward(self, input_embeds: Tensor, prev_embeds: Tensor) -> Tensor:
-
         input_embeds = torch.cat([input_embeds, prev_embeds], dim=1)
         input_embeds = self.attention(input_embeds)
         input_embeds = self.upsample(input_embeds)
@@ -207,7 +237,11 @@ class UnetAttentionDecoder3d(nn.Module):
 
         self.layers = nn.ModuleList()
 
-        self.in_conv = nn.Conv3d(latent_dim, _in_channels[0], kernel_size=1, bias=False)
+        self.in_conv = nn.Conv3d(
+            latent_dim,
+            _in_channels[0],
+            kernel_size=1,
+        )
         self.in_attention = Attention3d(
             _in_channels[0],
             _in_channels[0] // head_size,
@@ -218,7 +252,11 @@ class UnetAttentionDecoder3d(nn.Module):
                 UnetAttentionDecoderLayer3d(_in_channels[i], _out_channels[i], _in_channels[i] // head_size, head_size)
             )
         self.out_norm = SpatialRMSNorm(_out_channels[-1])
-        self.out_conv = nn.Conv3d(_out_channels[-1], out_channels, kernel_size=1, bias=False)
+        self.out_conv = nn.Conv3d(
+            _out_channels[-1],
+            out_channels,
+            kernel_size=1,
+        )
         self.nonlinear = nn.SiLU(True)
 
     def forward(self, latents: Tensor, prev_embeds: List[Tensor]) -> Tensor:

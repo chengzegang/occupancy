@@ -495,12 +495,6 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         return torch.tensor(pos_weight, device=voxel.device, dtype=voxel.dtype)
 
 
-def check_bias(model: nn.Module):
-    for mod in model.modules():
-        if hasattr(mod, "bias") and mod.bias is not None:
-            raise RuntimeError(f"bias found: {mod}")
-
-
 def config_model(args):
     image_autoencoderkl_model_id = os.path.join(args.save_dir, "image_autoencoderkl")
     model = None
@@ -529,11 +523,9 @@ def config_model(args):
             mmap=True,
         ),
         assign=True,
+        strict=False,
     )
-    check_bias(model.voxel_autoencoderkl)
-    check_bias(model.image_encoder)
-    check_bias(model.plane2polar)
-    check_bias(model.decoder)
+
     model.to(dtype=args.dtype, device=args.device, non_blocking=True)
     model.voxel_autoencoderkl.encoder = torch.jit.script(model.voxel_autoencoderkl.encoder)
     model.voxel_autoencoderkl.decoder = torch.jit.script(model.voxel_autoencoderkl.decoder)

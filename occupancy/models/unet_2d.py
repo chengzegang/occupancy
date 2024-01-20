@@ -4,20 +4,25 @@ from torch import nn, Tensor
 from .transformer import RMSNorm, Attention
 
 
+@torch.jit.script
+def fused_spatial_rmsnorm(x: Tensor, weight: Tensor, bias: Tensor, eps: float = 1e-5) -> Tensor:
+    shape = x.shape
+    x = x.view(x.shape[0], x.shape[1], -1)
+    x = x * torch.rsqrt((x**2).mean(dim=-1, keepdim=True) + eps) * weight.view(-1, 1) + bias.view(-1, 1)
+    x = x.view(shape)
+    return x
+
+
 class SpatialRMSNorm(nn.Module):
-    def __init__(self, num_features, eps=1e-8):
+    def __init__(self, num_features: int, eps: float = 1e-5):
         super().__init__()
-        self.eps = eps
         self.num_features = num_features
-        self.scale = nn.Parameter(torch.ones(num_features))
+        self.eps = eps
+        self.scale = nn.Parameter(torch.ones(num_features, dtype=torch.bfloat16))
+        self.bias = nn.Parameter(torch.zeros(num_features, dtype=torch.bfloat16))
 
     def forward(self, hidden_states: Tensor) -> Tensor:
-        shape = hidden_states.shape
-        hidden_states = hidden_states.view(shape[0], shape[1], -1)
-        hidden_states = hidden_states * torch.rsqrt((hidden_states**2).mean(dim=-1, keepdim=True) + self.eps)
-        out = hidden_states.view(hidden_states.shape[0], hidden_states.shape[1], -1) * self.scale.unsqueeze(-1)
-        out = out.view(shape)
-        return out
+        return fused_spatial_rmsnorm(hidden_states, self.scale, self.bias, self.eps)
 
 
 class AttentionLayer2d(nn.Module):
@@ -44,11 +49,30 @@ class UnetEncoderLayer2d(nn.Module):
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
         self.norm1 = SpatialRMSNorm(in_channels)
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+        )
         self.norm2 = SpatialRMSNorm(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.shorcut = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
-        self.downsample = nn.Conv2d(out_channels, out_channels, kernel_size=2, stride=2, bias=False)
+        self.conv2 = nn.Conv2d(
+            out_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+        )
+        self.shorcut = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=1,
+        )
+        self.downsample = nn.Conv2d(
+            out_channels,
+            out_channels,
+            kernel_size=2,
+            stride=2,
+        )
         self.nonlinear = nn.SiLU(True)
 
     def forward(self, input_embeds: Tensor) -> Tensor:
@@ -85,7 +109,6 @@ class UnetEncoder2d(nn.Module):
                 in_channels,
                 base_channels,
                 kernel_size=1,
-                bias=False
             )
         )
 
@@ -94,7 +117,13 @@ class UnetEncoder2d(nn.Module):
         self.layers.append(AttentionLayer2d(_out_channels[-1], num_heads, 128))
         self.layers.append(SpatialRMSNorm(_out_channels[-1]))
         self.layers.append(nn.SiLU(True))
-        self.layers.append(nn.Conv2d(_out_channels[-1], latent_dim, kernel_size=1, bias=False))
+        self.layers.append(
+            nn.Conv2d(
+                _out_channels[-1],
+                latent_dim,
+                kernel_size=1,
+            )
+        )
 
     def forward(self, voxel_inputs: Tensor) -> Tensor:
         return self.layers(voxel_inputs)
@@ -104,11 +133,30 @@ class UnetDecoderLayer2d(nn.Module):
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
         self.norm1 = SpatialRMSNorm(in_channels)
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+        )
         self.norm2 = SpatialRMSNorm(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.shorcut = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
-        self.upsample = nn.ConvTranspose2d(out_channels, out_channels, kernel_size=2, stride=2, bias=False)
+        self.conv2 = nn.Conv2d(
+            out_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+        )
+        self.shorcut = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=1,
+        )
+        self.upsample = nn.ConvTranspose2d(
+            out_channels,
+            out_channels,
+            kernel_size=2,
+            stride=2,
+        )
         self.nonlinear = nn.SiLU(True)
 
     def forward(self, input_embeds: Tensor) -> Tensor:
@@ -128,9 +176,24 @@ class SwiGLU2d(nn.Module):
     def __init__(self, n_channels: int):
         super().__init__()
         self.norm = nn.InstanceNorm2d(n_channels)
-        self.conv1 = nn.Conv2d(n_channels, n_channels // 4, kernel_size=3, padding=1, bias=False)
-        self.conv2 = nn.Conv2d(n_channels, n_channels // 4, kernel_size=3, padding=1, bias=False)
-        self.conv3 = nn.Conv2d(n_channels // 4, n_channels, kernel_size=3, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(
+            n_channels,
+            n_channels // 4,
+            kernel_size=3,
+            padding=1,
+        )
+        self.conv2 = nn.Conv2d(
+            n_channels,
+            n_channels // 4,
+            kernel_size=3,
+            padding=1,
+        )
+        self.conv3 = nn.Conv2d(
+            n_channels // 4,
+            n_channels,
+            kernel_size=3,
+            padding=1,
+        )
         self.nonlinear = nn.ReLU(True)
 
     def forward(self, input: Tensor) -> Tensor:
@@ -161,7 +224,13 @@ class UnetDecoder2d(nn.Module):
         num_heads = _in_channels[0] // 128
 
         self.layers = nn.Sequential()
-        self.layers.append(nn.Conv2d(latent_dim, _in_channels[0], kernel_size=1, bias=False))
+        self.layers.append(
+            nn.Conv2d(
+                latent_dim,
+                _in_channels[0],
+                kernel_size=1,
+            )
+        )
         self.layers.append(
             AttentionLayer2d(
                 _in_channels[0],
@@ -173,7 +242,13 @@ class UnetDecoder2d(nn.Module):
             self.layers.append(UnetDecoderLayer2d(_in_channels[i], _out_channels[i]))
         self.layers.append(SpatialRMSNorm(base_channels))
         self.layers.append(nn.SiLU(True))
-        self.layers.append(nn.Conv2d(base_channels, out_channels, kernel_size=1, bias=False))
+        self.layers.append(
+            nn.Conv2d(
+                base_channels,
+                out_channels,
+                kernel_size=1,
+            )
+        )
 
     def forward(self, voxel_inputs: Tensor) -> Tensor:
         return self.layers(voxel_inputs)

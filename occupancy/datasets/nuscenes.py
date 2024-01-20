@@ -305,7 +305,7 @@ class NuScenesOccupancyDataset(Dataset):
         return len(self._paths)
 
     def __getitem__(self, index: int):
-        return NuScenesPointCloud._load_occupancy(self._paths[index])[0]
+        return NuScenesPointCloud._load_occupancy(self._paths[index])[2][0]
 
 
 class NuScenesDataset(Dataset):

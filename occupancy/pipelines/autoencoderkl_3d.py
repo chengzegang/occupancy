@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 
 from occupancy import ops
-from occupancy.datasets.nuscenes import NuScenesDataset, NuScenesOccupancyDataset
+from occupancy.datasets.nuscenes import NuScenesDataset, NuScenesDatasetItem, NuScenesOccupancyDataset
 from occupancy.models.unet_3d import UnetDecoder3d, UnetEncoder3d
 
 
@@ -88,7 +88,7 @@ class AutoEncoderKL3dInput:
         device="cuda",
     ):
         voxel = voxel.type(dtype).to(device)
-        self.voxel = self.splicing(voxel)
+        self.voxel = voxel  # self.splicing(voxel)
         self.kl_weight = kl_weight
         self.clamp_min = clamp_min
         self.clamp_max = clamp_max
@@ -336,16 +336,12 @@ def config_model(args):
     model_config = AutoEncoderKL3dConfig(in_channels=args.num_classes, out_channels=args.num_classes)
     os.makedirs(args.save_dir, exist_ok=True)
     model = AutoEncoderKL3d.from_config(model_config)
-    for mod in model.modules():
-        if hasattr(mod, "bias") and mod.bias is not None:
-            print(mod)
-            raise ValueError("Bias found")
     try:
         model = load_model(model, os.path.join(args.save_dir, f"autoencoderkl-cls{args.num_classes}.pt"), partial=True)
     except Exception as e:
         print(e)
         pass
-    model.to(args.dtype)
+    model.to(args.dtype).to(args.device)
     return model, AutoEncoderKL3dInput
 
 
