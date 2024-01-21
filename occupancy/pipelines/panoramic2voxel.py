@@ -33,7 +33,7 @@ from torch.optim import AdamW
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import wandb
-from occupancy.models.unet_2d import Unet2d, UnetEncoder2d
+from occupancy.models.unet_2d import SpatialRMSNorm, Unet2d, UnetEncoder2d
 from occupancy.models.unet_3d import UnetEncoder3d, UnetLatentAttention3d
 from .autoencoderkl_3d import AutoEncoderKL3d, GaussianDistribution
 import torchvision.transforms.v2 as T
@@ -259,20 +259,61 @@ class VisionTransformerFeatureExtractor(nn.Module):
     def __init__(
         self,
         in_channels: int,
-        base_channels: int,
+        patch_size: int,
         hidden_size: int,
         num_layers: int,
-        num_attention_layers: int,
-        head_size: int,
     ):
         super().__init__()
-        self.encoder = UnetEncoder2d(in_channels, hidden_size, base_channels, 2, num_layers)
-        self.decoder = Transformer(hidden_size, num_attention_layers, hidden_size // head_size, head_size)
+        self.in_conv = nn.Conv2d(in_channels, hidden_size, patch_size, stride=patch_size)
+        self.decoder = Transformer(hidden_size, num_layers, hidden_size // 128, 128)
 
     def forward(self, input: Tensor) -> Tensor:
-        embeds = self.encoder(input)
+        embeds = self.in_conv(input)
         embeds = self.decoder(embeds.flatten(2).transpose(-1, -2)).transpose(-1, -2).view_as(embeds)
         return embeds
+
+
+class TransformerPlane2Polar(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        radius_channels: int,
+        patch_size: int,
+        hidden_size: int,
+        num_layers: int,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.depth_channels = radius_channels
+        self.in_conv = nn.Conv2d(in_channels, hidden_size * radius_channels, patch_size, stride=patch_size)
+        self.transformer = Transformer(hidden_size, num_layers, hidden_size // 128, 128)
+        # self.out_norm = SpatialRMSNorm(hidden_size)
+        # self.nonlinear = nn.SiLU(True)
+        self.out_conv = UnetAttention3d(hidden_size, out_channels, 1024, 512, 2, 2, 2, 128)
+
+    def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
+        batch_size = multiview.shape[0]
+        num_images = multiview.shape[1]
+        multiview = self.in_conv(multiview.flatten(0, 1))
+        multiview = multiview.view(
+            batch_size,
+            num_images,
+            self.hidden_size,
+            self.depth_channels,
+            *multiview.shape[2:],
+        )
+        multiview_polar = torch.cat(multiview.unbind(1), dim=-1)
+        multiview_polar = (
+            self.transformer(multiview_polar.flatten(2).transpose(-1, -2)).transpose(-1, -2).view_as(multiview_polar)
+        )
+        # multiview_polar = self.out_conv(multiview_polar)
+
+        multiview_polar = ops.transforms.view_as_cartesian(multiview_polar, out_shape, "bilinear", align_corners=False)
+        # multiview_polar = self.out_norm(multiview_polar)
+        # multiview_polar = self.nonlinear(multiview_polar)
+        multiview_polar = self.out_conv(multiview_polar)
+        return multiview_polar
 
 
 class UnetPlane2Polar(nn.Module):
@@ -322,7 +363,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         super().__init__()
         self.num_classes = num_classes
         self.voxel_encoder_latent_dim = 16
-        self.plane2polar_depth_channels = 16
+        self.plane2polar_depth_channels = 8
         self.voxel_autoencoderkl = AutoEncoderKL3d(
             num_classes,
             num_classes,
@@ -335,23 +376,23 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         self.image_autoencoderkl = AutoencoderKL.from_pretrained(
             image_autoencoderkl_model_id, torch_dtype=torch.bfloat16, torchscript=True, device_map="auto"
         )
-        self.image_encoder = VisionTransformerFeatureExtractor(
-            self.image_autoencoderkl.config.latent_channels, 256, 1024, 2, 6, 128
+        # self.image_encoder = VisionTransformerFeatureExtractor(
+        #    self.image_autoencoderkl.config.latent_channels, 8, 512, 8
+        # )
+        self.plane2polar = TransformerPlane2Polar(
+            4, self.voxel_encoder_latent_dim, self.plane2polar_depth_channels, 8, 1024, 16
         )
-        self.plane2polar = UnetPlane2Polar(
-            4, self.voxel_encoder_latent_dim * 2, self.plane2polar_depth_channels, 128, 3, 1024, 8
-        )
-        self.decoder = UnetConditionalAttention3d(
-            self.voxel_encoder_latent_dim * 2,
-            self.voxel_encoder_latent_dim,
-            1024,
-            1024,
-            256,
-            2,
-            2,
-            4,
-            head_size=128,
-        )
+        # self.decoder = UnetConditionalAttention3d(
+        #    512,
+        #    self.voxel_encoder_latent_dim * 2,
+        #    512,
+        #    512,
+        #    512,
+        #    2,
+        #    2,
+        #    4,
+        #    head_size=128,
+        # )
 
         self.voxel_autoencoderkl.requires_grad_(False)
         self.image_autoencoderkl.requires_grad_(False)
@@ -380,13 +421,13 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         # images = images[:, torch.randperm(num_images)]
         with torch.no_grad():
             multiview_sample = self.prepare_image(images.flatten(0, 1))
-        multiview_features = self.image_encoder(multiview_sample)
-        multiview_features = multiview_features.view(batch_size, num_images, *multiview_features.shape[1:])
-        multiview_features = torch.cat(multiview_features.unbind(1), dim=-1)
+        # multiview_features = self.image_encoder(multiview_sample)
+        # multiview_features = multiview_features.view(batch_size, num_images, *multiview_features.shape[1:])
+        # multiview_features = torch.cat(multiview_features.unbind(1), dim=-1)
         multiview_latent = self.plane2polar(
             multiview_sample.view(batch_size, num_images, *multiview_sample.shape[1:]), voxel_shape
         )
-        return multiview_latent, multiview_features
+        return multiview_latent  # , multiview_features
 
     def __call__(self, input: MultiViewImageToVoxelPipelineInput) -> MultiViewImageToVoxelPipelineOutput:
         return super().__call__(input)
@@ -449,21 +490,21 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             with torch.no_grad():
                 input.images.data = self.image_augmentation(input.images.data.float()).type_as(input.images.data)
 
-        multiview_voxel, multiview_sample = self.prepare_multiview(input.images, (32, 32, 4))
-        model_output = self.decoder(multiview_voxel, multiview_sample)
+        model_output = self.prepare_multiview(input.images, (32, 32, 4))
+        # model_dist = multiview_voxel  # self.decoder(multiview_voxel, multiview_sample)
         # model_dist = GaussianDistribution.from_latent(model_dist, latent_scale=self.voxel_autoencoderkl.latent_scale)
         # model_output = model_dist.sample()
 
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
         # with torch.no_grad():
-        #    gt_voxel_dist = self.voxel_autoencoderkl.encode(voxel)
+        #    gt_occ_dist = self.voxel_autoencoderkl.encode(input.occupancy)
         # with torch.no_grad():
         # pred_voxel = self.decode_latent_sample(model_output, input.voxel.shape[-3:])
         # loss, pos_weight = self.random_sample_voxel(model_output, voxel)
-        pos_weight = self.influence_radial_weight(input.voxel)
+        pos_weight = self.influence_radial_weight(input.occupancy)
         loss = (
-            F.binary_cross_entropy_with_logits(pred_occ, input.voxel, pos_weight=pos_weight)
-            # + 0.001 * model_dist.kl_div(gt_voxel_dist).mean()
+            F.binary_cross_entropy_with_logits(pred_occ, input.occupancy, pos_weight=pos_weight)
+            # + 0.001 * model_dist.kl_div(gt_occ_dist).mean()
         )
         return MultiViewImageToVoxelPipelineOutput(
             pred_occ,
@@ -476,22 +517,22 @@ class MultiViewImageToVoxelPipeline(nn.Module):
 
     def state_dict(self, *, prefix: str = "", keep_vars: bool = False) -> dict:
         state_dict = {
-            "image_encoder": self.image_encoder.state_dict(None, prefix, keep_vars),
+            # "image_encoder": self.image_encoder.state_dict(None, prefix, keep_vars),
             "plane2polar": self.plane2polar.state_dict(None, prefix, keep_vars),
-            "decoder": self.decoder.state_dict(None, prefix, keep_vars),
+            # "decoder": self.decoder.state_dict(None, prefix, keep_vars),
         }
         return state_dict
 
     def load_state_dict(self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False):
-        self.image_encoder.load_state_dict(state_dict["image_encoder"], strict, assign)
+        # self.image_encoder.load_state_dict(state_dict["image_encoder"], strict, assign)
         self.plane2polar.load_state_dict(state_dict["plane2polar"], strict, assign)
-        self.decoder.load_state_dict(state_dict["decoder"], strict, assign)
+        # self.decoder.load_state_dict(state_dict["decoder"], strict, assign)
 
     def influence_radial_weight(self, voxel: Tensor) -> Tensor:
         total = voxel.numel()
         num_pos = voxel.sum()
         pos_weight = math.pow((total / num_pos) * 4 * math.pi / 3, 1 / 3)
-        return torch.tensor(3.0, device=voxel.device, dtype=voxel.dtype)
+        return torch.tensor(pos_weight, device=voxel.device, dtype=voxel.dtype)
 
 
 def config_model(args):
