@@ -1,7 +1,8 @@
 __all__ = ["unet_encoder3d", "unet_decoder3d"]
+import math
 import torch
 from torch import nn, Tensor
-from .transformer import RMSNorm, Attention, Transformer
+from .transformer import RMSNorm, Attention, RotaryEmbedding, Transformer
 
 
 @torch.jit.script
@@ -23,6 +24,77 @@ class SpatialRMSNorm(nn.Module):
 
     def forward(self, hidden_states: Tensor) -> Tensor:
         return fused_spatial_rmsnorm(hidden_states, self.scale, self.bias, self.eps)
+
+
+def _naive_scaled_dot_product_attention(Q: Tensor, K: Tensor, V: Tensor) -> Tensor:
+    attn_weight = torch.softmax((Q @ K.transpose(-2, -1) / math.sqrt(Q.size(-1))), dim=-1)
+    return attn_weight @ V
+
+
+class ExportableAttention(nn.Module):
+    def __init__(self, hidden_states: int, num_heads: int, head_size: int):
+        super().__init__()
+        self.hidden_states = hidden_states
+        self.num_heads = num_heads
+        self.head_size = head_size
+
+        self.q_proj = nn.Linear(
+            hidden_states,
+            num_heads * head_size,
+            dtype=torch.bfloat16,
+        )
+        self.k_proj = nn.Linear(
+            hidden_states,
+            num_heads * head_size,
+            dtype=torch.bfloat16,
+        )
+        self.v_proj = nn.Linear(
+            hidden_states,
+            num_heads * head_size,
+            dtype=torch.bfloat16,
+        )
+        self.out_proj = nn.Linear(
+            num_heads * head_size,
+            hidden_states,
+            dtype=torch.bfloat16,
+        )
+        self.rotary = RotaryEmbedding(head_size)
+
+    def forward(self, input_embeds: Tensor) -> Tensor:
+        q = self.q_proj(input_embeds)
+        k = self.k_proj(input_embeds)
+        v = self.v_proj(input_embeds)
+
+        q = q.view(q.shape[0], q.shape[1], self.num_heads, self.head_size).transpose(-2, -3)
+        k = k.view(k.shape[0], k.shape[1], self.num_heads, self.head_size).transpose(-2, -3)
+        v = v.view(v.shape[0], v.shape[1], self.num_heads, self.head_size).transpose(-2, -3)
+        q, k = self.rotary(q, k)
+        attn_weights = _naive_scaled_dot_product_attention(q, k, v)
+        attn_weights = attn_weights.transpose(-2, -3).flatten(-2)
+
+        out = self.out_proj(attn_weights)
+
+        return out
+
+
+class ExportableAttentionLayer3d(nn.Module):
+    def __init__(self, hidden_size: int, num_heads: int, head_size: int):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
+        self.head_size = head_size
+        self.norm = RMSNorm(hidden_size)
+        self.attention = ExportableAttention(hidden_size, num_heads, head_size)
+
+    def forward(self, hidden_states: Tensor) -> Tensor:
+        input_seq = hidden_states.flatten(2).transpose(-1, -2)
+        residual = input_seq
+
+        input_seq = self.norm(input_seq)
+        input_seq = self.attention(input_seq)
+        input_seq = input_seq + residual
+        hidden_states = input_seq.transpose(-1, -2).view_as(hidden_states)
+        return hidden_states
 
 
 class AttentionLayer3d(nn.Module):
@@ -96,6 +168,7 @@ class UnetEncoder3d(nn.Module):
         base_channels: int = 64,
         multiplier: int = 2,
         num_layers: int = 3,
+        exportable: bool = False,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -114,7 +187,11 @@ class UnetEncoder3d(nn.Module):
 
         for i in range(num_layers):
             self.layers.append(UnetEncoderLayer3d(_in_channels[i], _out_channels[i]))
-        self.layers.append(AttentionLayer3d(_out_channels[-1], num_heads, 128))
+        self.layers.append(
+            AttentionLayer3d(_out_channels[-1], num_heads, 128)
+            if not exportable
+            else ExportableAttentionLayer3d(_out_channels[-1], num_heads, 128)
+        )
         self.layers.append(SpatialRMSNorm(_out_channels[-1]))
         self.layers.append(nn.SiLU(True))
         self.layers.append(
@@ -180,6 +257,7 @@ class UnetDecoder3d(nn.Module):
         base_channels: int = 64,
         multiplier: int = 2,
         num_layers: int = 3,
+        exportable: bool = False,
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -202,6 +280,8 @@ class UnetDecoder3d(nn.Module):
                 num_heads,
                 128,
             )
+            if not exportable
+            else ExportableAttentionLayer3d(_in_channels[0], num_heads, 128)
         )
         for i in range(num_layers):
             self.layers.append(UnetDecoderLayer3d(_in_channels[i], _out_channels[i]))
@@ -228,10 +308,15 @@ class Unet3d(nn.Module):
         base_channels: int = 64,
         multiplier: int = 2,
         num_layers: int = 3,
+        exportable: bool = False,
     ):
         super().__init__()
-        self.encoder = UnetEncoder3d(in_channels, latent_dim, base_channels, multiplier, num_layers)
-        self.decoder = UnetDecoder3d(out_channels, latent_dim, base_channels, multiplier, num_layers)
+        self.encoder = UnetEncoder3d(
+            in_channels, latent_dim, base_channels, multiplier, num_layers, exportable=exportable
+        )
+        self.decoder = UnetDecoder3d(
+            out_channels, latent_dim, base_channels, multiplier, num_layers, exportable=exportable
+        )
 
     def forward(self, voxel_inputs: Tensor) -> Tensor:
         latent = self.encoder(voxel_inputs)

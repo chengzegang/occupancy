@@ -80,8 +80,8 @@ def apply_rotary_pos_emb(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
     # NOTE: This could probably be moved to Triton
 
     # Handle a possible sequence length mismatch in between q and k
-    cos = cos[..., : x.size(-2), :]
-    sin = sin[..., : x.size(-2), :]
+    cos = cos[..., : x.shape[-2], :]
+    sin = sin[..., : x.shape[-2], :]
 
     return (x * cos.type_as(x)) + (rotate_half(x) * sin.type_as(x))
 

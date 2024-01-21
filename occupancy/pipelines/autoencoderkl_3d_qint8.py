@@ -225,7 +225,6 @@ class AutoEncoderKL3d(nn.Module):
         base_channels: int = 64,
         multiplier: int = 2,
         num_layers: int = 3,
-        exportable: bool = False,
     ):
         super().__init__()
         self.latent_scale = 0.125
@@ -236,7 +235,6 @@ class AutoEncoderKL3d(nn.Module):
             base_channels=base_channels,
             multiplier=multiplier,
             num_layers=num_layers,
-            exportable=exportable,
         )
         self.decoder = UnetDecoder3d(
             out_channels=out_channels,
@@ -244,7 +242,6 @@ class AutoEncoderKL3d(nn.Module):
             base_channels=base_channels,
             multiplier=multiplier,
             num_layers=num_layers,
-            exportable=exportable,
         )
 
     def encode_latent(self, voxel_inputs: Tensor) -> Tensor:
@@ -260,43 +257,22 @@ class AutoEncoderKL3d(nn.Module):
         latent = latent / self.latent_scale
         return self.decoder(latent)
 
-    def _forward_batchsize_one(self, voxel: Tensor) -> Tensor:
-        latent = self.encode_latent(voxel)
-        latent_dist = GaussianDistribution.from_latent(latent, latent_scale=self.latent_scale)
-        latent_sample = latent_dist.sample()
-        pred_output = self.decode(latent_sample)
-        return latent, pred_output
-
     def forward(
         self,
         input: AutoEncoderKL3dInput,
     ) -> AutoEncoderKL3dOutput:
-        # NOTE: due to pytorch baddmm bug, we use pipeline optimization to force use of addmm
         voxel = self.voxel_augmentation(input.voxel)
-        voxel = torch.unbind(voxel, dim=0)
-        latent, pred_output = zip(*[self._forward_batchsize_one(v[None, ...]) for v in voxel])
-        latent = torch.cat(latent, dim=0)
-        pred_output = torch.cat(pred_output, dim=0)
-        latent_dist = GaussianDistribution.from_latent(latent, input.clamp_min, input.clamp_max, self.latent_scale)
-        kl_loss = input.kl_weight * latent_dist.kl_loss
+        latent_dists = self.encode(voxel)
+        latent_samples = latent_dists.sample()
+        pred_outputs = self.decode(latent_samples)
+        kl_loss = input.kl_weight * latent_dists.kl_loss
         return AutoEncoderKL3dOutput(
-            pred_output,
+            pred_outputs,
             input.voxel,
             kl_loss,
-            latent_dist,
-            latent_dist.sample(),
+            latent_dists,
+            latent_samples,
         )
-        # latent_dists = self.encode(voxel)
-        # latent_samples = latent_dists.sample()
-        # pred_outputs = self.decode(latent_samples)
-        # kl_loss = input.kl_weight * latent_dists.kl_loss
-        # return AutoEncoderKL3dOutput(
-        #    pred_outputs,
-        #    input.voxel,
-        #    kl_loss,
-        #    latent_dists,
-        #    latent_samples,
-        # )
 
     @classmethod
     def from_config(cls, config: AutoEncoderKL3dConfig) -> "AutoEncoderKL3d":
