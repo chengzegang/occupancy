@@ -289,7 +289,7 @@ class UnetPlane2Polar(nn.Module):
         super().__init__()
         self.polar_channels = polar_channels
         self.depth_channels = radius_channels
-        self.in_conv = nn.Conv2d(in_channels, polar_channels * radius_channels, 1, bias=False)
+        self.in_conv = nn.Conv2d(in_channels, polar_channels * radius_channels, 1)
         self.unet = UnetLatentAttention3d(
             polar_channels, polar_channels, hidden_size, base_channels, 2, num_layers, num_attention_layers, 128
         )
@@ -454,21 +454,20 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         # model_dist = GaussianDistribution.from_latent(model_dist, latent_scale=self.voxel_autoencoderkl.latent_scale)
         # model_output = model_dist.sample()
 
-        voxel = input.voxel
-        pred_voxel = self.voxel_autoencoderkl.decode(model_output)
+        pred_occ = self.voxel_autoencoderkl.decode(model_output)
         # with torch.no_grad():
         #    gt_voxel_dist = self.voxel_autoencoderkl.encode(voxel)
         # with torch.no_grad():
         # pred_voxel = self.decode_latent_sample(model_output, input.voxel.shape[-3:])
         # loss, pos_weight = self.random_sample_voxel(model_output, voxel)
-        pos_weight = self.influence_radial_weight(voxel)
+        pos_weight = self.influence_radial_weight(input.occupancy)
         loss = (
-            F.binary_cross_entropy_with_logits(pred_voxel, voxel, pos_weight=pos_weight)
+            F.binary_cross_entropy_with_logits(pred_occ, input.occupancy, pos_weight=pos_weight)
             # + 0.001 * model_dist.kl_div(gt_voxel_dist).mean()
         )
         return MultiViewImageToVoxelPipelineOutput(
-            pred_voxel,
-            voxel,
+            pred_occ,
+            input.voxel,
             input.occupancy,
             input.images,
             loss,
