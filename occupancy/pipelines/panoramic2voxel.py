@@ -460,9 +460,9 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         # with torch.no_grad():
         # pred_voxel = self.decode_latent_sample(model_output, input.voxel.shape[-3:])
         # loss, pos_weight = self.random_sample_voxel(model_output, voxel)
-        pos_weight = self.influence_radial_weight(input.occupancy)
+        pos_weight = self.influence_radial_weight(input.voxel)
         loss = (
-            F.binary_cross_entropy_with_logits(pred_occ, input.occupancy, pos_weight=pos_weight)
+            F.binary_cross_entropy_with_logits(pred_occ, input.voxel, pos_weight=pos_weight)
             # + 0.001 * model_dist.kl_div(gt_voxel_dist).mean()
         )
         return MultiViewImageToVoxelPipelineOutput(
@@ -491,7 +491,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         total = voxel.numel()
         num_pos = voxel.sum()
         pos_weight = math.pow((total / num_pos) * 4 * math.pi / 3, 1 / 3)
-        return torch.tensor(pos_weight, device=voxel.device, dtype=voxel.dtype)
+        return torch.tensor(3.0, device=voxel.device, dtype=voxel.dtype)
 
 
 def config_model(args):
