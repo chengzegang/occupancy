@@ -361,26 +361,12 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         self.image_autoencoderkl = AutoencoderKL.from_pretrained(
             image_autoencoderkl_model_id, torch_dtype=torch.bfloat16, torchscript=True, device_map="auto"
         )
-        # self.image_encoder = VisionTransformerFeatureExtractor(
-        #    self.image_autoencoderkl.config.latent_channels, 8, 512, 8
-        # )
+
         self.decoder = MultiViewImageToVoxelModel(
             4,
             self.voxel_encoder_latent_dim,
             self.plane2polar_depth_channels,
         )
-        # self.decoder = UnetConditionalAttention3d(
-        #    512,
-        #    self.voxel_encoder_latent_dim * 2,
-        #    512,
-        #    512,
-        #    512,
-        #    2,
-        #    2,
-        #    4,
-        #    head_size=128,
-        # )
-
         self.voxel_autoencoderkl.requires_grad_(False)
         self.image_autoencoderkl.requires_grad_(False)
         self._vae_slicing = False
@@ -405,7 +391,6 @@ class MultiViewImageToVoxelPipeline(nn.Module):
     def decode(self, images, voxel_shape) -> Tensor:
         batch_size = images.shape[0]
         num_images = images.shape[1]
-        images = images[:, torch.randperm(num_images)]
         with torch.no_grad():
             multiview_sample = self.prepare_image(images.flatten(0, 1))
 
@@ -474,7 +459,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         if self.training:
             with torch.no_grad():
                 input.images.data = self.image_augmentation(input.images.data.float()).type_as(input.images.data)
-
+                input.images.data = input.images.data[:, torch.randperm(input.images.data.shape[1])]
         model_output = self.decode(input.images, (32, 32, 4))
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
         pos_weight = self.influence_radial_weight(input.occupancy)
