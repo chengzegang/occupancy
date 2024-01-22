@@ -279,9 +279,11 @@ class MultiViewImageToVoxelModel(nn.Module):
         radius_channels: int = 8,
         patch_size: int = 8,
         hidden_size: int = 1024,
-        head_size: int = 64,
-        num_encoder_layers: int = 3,
-        num_transformer_layers: int = 12,
+        head_size: int = 128,
+        encoder_base_channels: int = 256,
+        refiner_base_channels: int = 256,
+        num_encoder_layers: int = 2,
+        num_encoder_attention_layers: int = 2,
         num_refiner_layers: int = 2,
         num_refiner_attention_layers: int = 2,
         multiplier: int = 2,
@@ -290,22 +292,23 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.in_channels = in_channels
         self.hidden_size = hidden_size
         self.radius_channels = radius_channels
-        self.encoder = UnetAttentionEncoder2d(
+        self.encoder = UnetAttention2d(
             in_channels,
             hidden_size * radius_channels,
-            hidden_size // (2**num_encoder_layers),
+            hidden_size,
+            encoder_base_channels,
             multiplier,
             num_encoder_layers,
+            num_encoder_attention_layers,
             head_size,
         )
-        self.transformer = Transformer(hidden_size, num_transformer_layers, hidden_size // head_size, head_size)
         self.patch_conv = nn.Conv2d(in_channels, hidden_size, patch_size, stride=patch_size)
         self.refiner = UnetConditionalAttention3d(
             hidden_size,
             out_channels,
             hidden_size,
             hidden_size,
-            hidden_size // (2**num_refiner_layers),
+            refiner_base_channels,
             multiplier,
             num_refiner_layers,
             num_refiner_attention_layers,
@@ -322,7 +325,7 @@ class MultiViewImageToVoxelModel(nn.Module):
             *patch_embeds.shape[1:],
         )
         patch_embeds = torch.cat(patch_embeds.unbind(1), dim=-1)
-        multiview = self.encoder(multiview.flatten(0, 1))[0]
+        multiview = self.encoder(multiview.flatten(0, 1))
         multiview = multiview.view(
             batch_size,
             num_images,
@@ -331,8 +334,6 @@ class MultiViewImageToVoxelModel(nn.Module):
             *multiview.shape[2:],
         )
         multiview = torch.cat(multiview.unbind(1), dim=-1)
-        multiview = self.transformer(multiview.flatten(2).transpose(-1, -2)).transpose(-1, -2).view_as(multiview)
-
         multiview = ops.transforms.view_as_cartesian(
             multiview, out_shape, "bilinear", align_corners=True  # to fix the geometry relationship
         )

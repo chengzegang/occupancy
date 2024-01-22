@@ -243,7 +243,7 @@ def train(
                         output, mean_loss = forward()
                 else:
                     output, mean_loss = forward()
-                    nn.utils.clip_grad_norm_(model.parameters(), 10.0)
+                    nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                     optimizer.step()
                     scheduler.step()
                     optimizer.zero_grad()
