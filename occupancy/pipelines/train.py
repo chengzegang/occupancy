@@ -16,7 +16,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
+import threading
 from . import autoencoderkl_3d, panoramic2voxel, diffusion3d
 
 torch.backends.cudnn.enabled = True
@@ -154,6 +154,26 @@ class CosineWarmupLR(LRScheduler):
         ]
 
 
+def save_state_dict(state_dict: dict, path: str):
+    torch.save(state_dict, path + ".tmp")
+    os.rename(path + ".tmp", path)
+
+
+def record(run, output, model: nn.Module, args: argparse.Namespace, step: int):
+    model.eval()
+    state_dict = model.state_dict() if not isinstance(model, DDP) else model.module.state_dict()
+    t = threading.Thread(
+        target=save_state_dict, args=(state_dict, os.path.join(args.save_dir, f"{args.model_name}.pt"))
+    )
+    t.start()
+    if threading.current_thread() == threading.main_thread():
+        fig = output.figure
+        fig.savefig(f"{args.model_name}.png")
+        run.log({"output": wandb.Image(fig)}, step=step)
+        plt.close(fig)
+    t.join()
+
+
 def train(
     local_rank: int,
     args: argparse.Namespace,
@@ -178,7 +198,7 @@ def train(
             AdamW,
             lr=args.lr,
             weight_decay=args.weight_decay,
-            betas=(0.9, 0.996),
+            betas=(0.9, 0.999),
             eps=1e-8,
             parameters_as_bucket_view=True,
         )
@@ -187,7 +207,7 @@ def train(
             model.parameters(),
             lr=args.lr,
             weight_decay=args.weight_decay,
-            betas=(0.9, 0.996),
+            betas=(0.9, 0.999),
             eps=1e-8,
         )
     total_steps = 2 * len(dl) // args.grad_accum
@@ -230,18 +250,7 @@ def train(
 
                 pbar.set_description(f"Loss: {mean_loss.item():.4f}, LR: {scheduler.get_last_lr()[0]:.3e}")
                 if step % args.save_every == 0 and torch.isfinite(mean_loss) and local_rank == 0:
-                    fig = output.figure
-                    fig.savefig(f"{args.model_name}.png")
-                    run.log({"output": wandb.Image(fig)}, step=step)
-                    plt.close(fig)
-                    model.eval()
-                    state_dict = model.state_dict() if not isinstance(model, DDP) else model.module.state_dict()
-                    state_dict = remove_prefix(state_dict, "_org_mod.")
-                    torch.save(state_dict, os.path.join(args.save_dir, f"{args.model_name}.tmp.pt"))
-                    os.rename(
-                        os.path.join(args.save_dir, f"{args.model_name}.tmp.pt"),
-                        os.path.join(args.save_dir, f"{args.model_name}.pt"),
-                    )
+                    record(run, output, model, args, step)
                 step += 1
 
 
