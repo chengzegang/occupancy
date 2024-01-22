@@ -66,6 +66,14 @@ class SwiGLU(nn.Module):
         self.out_features = out_features
         self.in_features = in_features
 
+        nn.init.normal_(self.w1.weight, std=1 / math.sqrt(hidden_features))
+        nn.init.normal_(self.w2.weight, std=1 / math.sqrt(hidden_features))
+        nn.init.normal_(self.w3.weight, std=1 / math.sqrt(out_features))
+
+        nn.init.constant_(self.w1.bias, 0)
+        nn.init.constant_(self.w2.bias, 0)
+        nn.init.constant_(self.w3.bias, 0)
+
     def forward(self, x: Tensor) -> Tensor:
         return fused_swiglu(x, self.w1.weight, self.w1.bias, self.w2.weight, self.w2.bias, self.w3.weight, self.w3.bias)
 
@@ -150,6 +158,16 @@ class Attention(nn.Module):
             dtype=torch.bfloat16,
         )
         self.rotary = RotaryEmbedding(head_size)
+
+        nn.init.normal_(self.q_proj.weight, std=1 / math.sqrt(num_heads * head_size))
+        nn.init.normal_(self.k_proj.weight, std=1 / math.sqrt(num_heads * head_size))
+        nn.init.normal_(self.v_proj.weight, std=1 / math.sqrt(num_heads * head_size))
+        nn.init.normal_(self.out_proj.weight, std=1 / math.sqrt(hidden_states))
+
+        nn.init.constant_(self.q_proj.bias, 0)
+        nn.init.constant_(self.k_proj.bias, 0)
+        nn.init.constant_(self.v_proj.bias, 0)
+        nn.init.constant_(self.out_proj.bias, 0)
 
     def forward(self, input_embeds: Tensor, attention_mask: Optional[Tensor] = None, is_causal: bool = False) -> Tensor:
         q = self.q_proj(input_embeds)

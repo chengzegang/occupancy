@@ -31,6 +31,13 @@ class UnetConvolution3d(nn.Module):
         )
         self.nonlinear = nn.SiLU(True)
 
+        nn.init.kaiming_normal_(self.conv1.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.zeros_(self.conv1.bias)
+        nn.init.kaiming_normal_(self.conv2.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.zeros_(self.conv2.bias)
+        nn.init.kaiming_normal_(self.shorcut.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.zeros_(self.shorcut.bias)
+
     def forward(self, input_embeds: Tensor) -> Tensor:
         residual = self.shorcut(input_embeds)
         input_embeds = self.norm1(input_embeds)
@@ -106,6 +113,9 @@ class UnetConditionalAttentionEncoderLayer3d(nn.Module):
         )
         self.attention = ConditionalAttention3d(out_channels, condition_size, num_heads, head_size)
 
+        nn.init.kaiming_normal_(self.downsample.weight, mode="fan_in", nonlinearity="relu")
+        nn.init.zeros_(self.downsample.bias)
+
     def forward(self, input_embeds: Tensor, condition_embeds: Tensor) -> Tensor:
         input_embeds = self.convolution(input_embeds)
         input_embeds = self.downsample(input_embeds)
@@ -157,6 +167,12 @@ class UnetConditionalAttentionEncoder3d(nn.Module):
             kernel_size=1,
         )
         self.nonlinear = nn.SiLU(True)
+
+        nn.init.kaiming_normal_(self.in_conv.weight, mode="fan_in", nonlinearity="relu")
+        nn.init.kaiming_normal_(self.out_conv.weight, mode="fan_in", nonlinearity="relu")
+
+        nn.init.zeros_(self.in_conv.bias)
+        nn.init.zeros_(self.out_conv.bias)
 
     def forward(self, input_embeds: Tensor, cond_embeds: Tensor) -> Tuple[Tensor, List[Tensor]]:
         input_embeds = self.in_conv(input_embeds)

@@ -5,7 +5,7 @@ from .polar import cartesian_to_polar
 import torch
 
 
-def filter_observable(points: Tensor, epsilon_degree: float = 0.5) -> Tensor:
+def filter_observable(points: Tensor, phi_eps_degree: float = 0.5, theta_eps_degree: float = 1.0) -> Tensor:
     """Filter out points that are not observable by the sensor.
 
     Args:
@@ -15,11 +15,12 @@ def filter_observable(points: Tensor, epsilon_degree: float = 0.5) -> Tensor:
     Returns:
         Tensor: (N, 3) tensor of points in the ego frame that are observable by the sensor.
     """
-    epsilon_theta = epsilon_degree / 180 * math.pi
-    epsilon_phi = epsilon_degree / 360 * math.pi
+    epsilon_theta = theta_eps_degree / 180 * math.pi
+    epsilon_phi = phi_eps_degree / 360 * math.pi
     r, theta, phi = cartesian_to_polar(points[0], points[1], points[2])
-    r = r / math.sqrt(3) * 2 - 1
-    theta = theta / torch.pi * 2 - 1
+    r_max = math.sqrt(3)
+    r = r * 2 / r_max - 1
+    theta = theta * 2 / torch.pi - 1
     phi = phi / torch.pi
 
     view_angle = torch.stack([theta, phi], dim=0)

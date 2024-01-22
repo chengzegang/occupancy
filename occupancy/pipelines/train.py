@@ -118,7 +118,7 @@ def to_human_readable(num: int) -> str:
 
 
 def count_parameters(model: nn.Module) -> int:
-    total = sum(p.numel() for p in model.parameters())
+    total = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = to_human_readable(total)
     return total
 
@@ -211,7 +211,7 @@ def train(
             eps=1e-8,
         )
     total_steps = 2 * len(dl) // args.grad_accum
-    scheduler = CosineWarmupLR(optimizer, 1000, total_steps)
+    scheduler = CosineWarmupLR(optimizer, args.warmup_steps, total_steps)
     args.model_name = f"{args.model}-cls{args.num_classes}"
     with wandb.init(
         project="occupancy",
@@ -243,7 +243,7 @@ def train(
                         output, mean_loss = forward()
                 else:
                     output, mean_loss = forward()
-                    nn.utils.clip_grad_norm_(model.parameters(), 1)
+                    nn.utils.clip_grad_norm_(model.parameters(), 10.0)
                     optimizer.step()
                     scheduler.step()
                     optimizer.zero_grad()
@@ -272,6 +272,7 @@ if __name__ == "__main__":
     parser.add_argument("--weight-decay", type=float, default=1e-5)
     parser.add_argument("--total-epochs", type=int, default=100)
     parser.add_argument("--num-classes", type=int, default=1)
+    parser.add_argument("--warmup-steps", type=int, default=1000)
 
     args = parser.parse_args()
     match args.dtype:

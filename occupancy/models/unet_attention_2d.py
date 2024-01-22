@@ -1,4 +1,5 @@
 __all__ = ["attention_unet2d"]
+import math
 from typing import List, Optional, Tuple
 import torch
 from torch import nn, Tensor
@@ -30,6 +31,13 @@ class UnetConvolution2d(nn.Module):
             kernel_size=1,
         )
         self.nonlinear = nn.SiLU(True)
+
+        nn.init.kaiming_normal_(self.conv1.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.zeros_(self.conv1.bias)
+        nn.init.kaiming_normal_(self.conv2.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.zeros_(self.conv2.bias)
+        nn.init.kaiming_normal_(self.shorcut.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.zeros_(self.shorcut.bias)
 
     def forward(self, input_embeds: Tensor) -> Tensor:
         residual = self.shorcut(input_embeds)
@@ -88,6 +96,9 @@ class UnetAttentionEncoderLayer2d(nn.Module):
         )
         self.attention = Attention2d(out_channels, num_heads, head_size)
 
+        nn.init.kaiming_normal_(self.downsample.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.zeros_(self.downsample.bias)
+
     def forward(self, input_embeds: Tensor) -> Tensor:
         input_embeds = self.convolution(input_embeds)
         input_embeds = self.downsample(input_embeds)
@@ -135,6 +146,12 @@ class UnetAttentionEncoder2d(nn.Module):
             kernel_size=1,
         )
         self.nonlinear = nn.SiLU(True)
+
+        nn.init.kaiming_normal_(self.in_conv.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.zeros_(self.in_conv.bias)
+
+        nn.init.kaiming_normal_(self.out_conv.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.zeros_(self.out_conv.bias)
 
     def forward(self, input_embeds: Tensor) -> Tuple[Tensor, List[Tensor]]:
         input_embeds = self.in_conv(input_embeds)
@@ -207,6 +224,12 @@ class UnetAttentionDecoder2d(nn.Module):
             kernel_size=1,
         )
         self.nonlinear = nn.SiLU(True)
+
+        nn.init.kaiming_normal_(self.in_conv.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.zeros_(self.in_conv.bias)
+
+        nn.init.kaiming_normal_(self.out_conv.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.zeros_(self.out_conv.bias)
 
     def forward(self, latents: Tensor, prev_embeds: List[Tensor]) -> Tensor:
         hidden_states = self.in_conv(latents)

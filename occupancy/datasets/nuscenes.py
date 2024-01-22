@@ -193,7 +193,7 @@ class NuScenesPointCloud:
         points_[0] /= 20
         points_[1] /= 256
         points_[2] /= 256
-        obs_ind = ops.filter_observable(points_[[2, 1, 0]], 1)
+        obs_ind = ops.filter_observable(points_[[2, 1, 0]], 0.05, 5)
         obs_points = points[:, obs_ind]
 
         obs_voxel = torch.zeros(512, 512, 64, dtype=torch.long)
@@ -212,13 +212,6 @@ class NuScenesPointCloud:
     @classmethod
     def load(cls, metadata: dict) -> "NuScenesPointCloud":
         sample_token = metadata["sample_token"]
-        # points = cls._load_lidar(metadata["filename"]).t()
-        # panoptic = cls._load_panoptic(metadata["panoptic"]["filename"])[None, None, :] + 1
-        # rotation = torch.as_tensor(metadata["rotation"])
-        # rotation = roma.quat_wxyz_to_xyzw(rotation)
-        # voxel = cls._pointcloud_to_voxelgrid(points[0], panoptic[0])
-        # points[:3] = roma.quat_action(rotation.expand(points.shape[-1], -1), points[:3].T).T
-        # points = points.unsqueeze(0)
         points, voxel, occupancy = cls._load_occupancy(metadata["occupancy"])
 
         location = points[:3]

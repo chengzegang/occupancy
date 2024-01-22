@@ -117,8 +117,8 @@ class MultiViewImageToVoxelPipelineInput:
 
 class MultiViewImageToVoxelPipelineOutput:
     prediction: Tensor
-    ground_truth: Tensor
-    occupancy: Tensor
+    observable: Tensor
+    full: Tensor
     images: Tensor
     loss: Optional[Tensor] = None
     pos_weight: Optional[Tensor] = None
@@ -156,8 +156,8 @@ class MultiViewImageToVoxelPipelineOutput:
         pos_weight=None,
     ):
         self.prediction = prediction
-        self.ground_truth = ground_truth
-        self.occupancy = occupancy
+        self.observable = ground_truth
+        self.full = occupancy
         self.images = images
         self.loss = loss
         self.pos_weight = pos_weight
@@ -165,25 +165,22 @@ class MultiViewImageToVoxelPipelineOutput:
     @property
     @torch.jit.unused
     def iou(self):
-        return ops.iou(self.prediction.flatten() >= 0, self.occupancy.flatten() > 0, 2, 0)
+        return ops.iou(self.prediction.flatten() >= 0, self.full.flatten() > 0, 2, 0)
 
     @property
     @torch.jit.unused
     def figure(self) -> plt.Figure:
         plt.close("all")
-        occupancy = self.occupancy
-        oi, oj, ok = torch.where(occupancy[0, 0].detach().cpu() > 0)
-        oc = occupancy[0, 0, oi, oj, ok].detach().cpu()
+        oi, oj, ok = torch.where(self.full[0, 0].detach().cpu() > 0)
+        oc = self.full[0, 0, oi, oj, ok].detach().cpu()
         oc = ok
 
-        ground_truth = self.ground_truth
-        i, j, k = torch.where(ground_truth[0, 0].detach().cpu() > 0)
-        c = ground_truth[0, 0, i, j, k].detach().cpu()
+        i, j, k = torch.where(self.observable[0, 0].detach().cpu() > 0)
+        c = self.observable[0, 0, i, j, k].detach().cpu()
         c = k
 
-        prediction = self.prediction
-        ih, jh, kh = torch.where(prediction[0, 0].detach().cpu() >= 0)
-        ch = prediction[0, 0, ih, jh, kh].detach().cpu()
+        ih, jh, kh = torch.where(self.prediction[0, 0].detach().cpu() >= 0)
+        ch = self.prediction[0, 0, ih, jh, kh].detach().cpu()
         ch = kh
 
         x_size = self.prediction.size(-3)
@@ -280,12 +277,11 @@ class MultiViewImageToVoxelModel(nn.Module):
         in_channels: int = 4,
         out_channels: int = 16,
         radius_channels: int = 8,
-        base_channels: int = 128,
         patch_size: int = 8,
         hidden_size: int = 1024,
-        head_size: int = 128,
+        head_size: int = 64,
         num_encoder_layers: int = 3,
-        num_transformer_layers: int = 16,
+        num_transformer_layers: int = 12,
         num_refiner_layers: int = 2,
         num_refiner_attention_layers: int = 2,
         multiplier: int = 2,
@@ -295,7 +291,12 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.hidden_size = hidden_size
         self.radius_channels = radius_channels
         self.encoder = UnetAttentionEncoder2d(
-            in_channels, hidden_size * radius_channels, base_channels, multiplier, num_encoder_layers, head_size
+            in_channels,
+            hidden_size * radius_channels,
+            hidden_size // (2**num_encoder_layers),
+            multiplier,
+            num_encoder_layers,
+            head_size,
         )
         self.transformer = Transformer(hidden_size, num_transformer_layers, hidden_size // head_size, head_size)
         self.patch_conv = nn.Conv2d(in_channels, hidden_size, patch_size, stride=patch_size)
@@ -304,7 +305,7 @@ class MultiViewImageToVoxelModel(nn.Module):
             out_channels,
             hidden_size,
             hidden_size,
-            hidden_size // 2,
+            hidden_size // (2**num_refiner_layers),
             multiplier,
             num_refiner_layers,
             num_refiner_attention_layers,
@@ -463,8 +464,8 @@ class MultiViewImageToVoxelPipeline(nn.Module):
                 input.images.data = input.images.data[:, torch.randperm(input.images.data.shape[1])]
         model_output = self.decode(input.images, (32, 32, 4))
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
-        pos_weight = self.influence_radial_weight(input.occupancy)
-        loss = F.binary_cross_entropy_with_logits(pred_occ, input.occupancy, pos_weight=pos_weight)
+        pos_weight = self.influence_radial_weight(input.voxel)
+        loss = F.binary_cross_entropy_with_logits(pred_occ, input.voxel, pos_weight=pos_weight)
         return MultiViewImageToVoxelPipelineOutput(
             pred_occ,
             input.voxel,
