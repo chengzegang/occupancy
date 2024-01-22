@@ -380,7 +380,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         #    self.image_autoencoderkl.config.latent_channels, 8, 512, 8
         # )
         self.plane2polar = TransformerPlane2Polar(
-            4, self.voxel_encoder_latent_dim, self.plane2polar_depth_channels, 8, 1024, 16
+            4, self.voxel_encoder_latent_dim * 2, self.plane2polar_depth_channels, 8, 1024, 16
         )
         # self.decoder = UnetConditionalAttention3d(
         #    512,
@@ -490,21 +490,20 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             with torch.no_grad():
                 input.images.data = self.image_augmentation(input.images.data.float()).type_as(input.images.data)
 
-        model_output = self.prepare_multiview(input.images, (32, 32, 4))
-        # model_dist = multiview_voxel  # self.decoder(multiview_voxel, multiview_sample)
-        # model_dist = GaussianDistribution.from_latent(model_dist, latent_scale=self.voxel_autoencoderkl.latent_scale)
-        # model_output = model_dist.sample()
+        model_dist = self.prepare_multiview(input.images, (32, 32, 4))
+        model_dist = GaussianDistribution.from_latent(model_dist, latent_scale=self.voxel_autoencoderkl.latent_scale)
+        model_output = model_dist.sample()
 
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
-        # with torch.no_grad():
-        #    gt_occ_dist = self.voxel_autoencoderkl.encode(input.occupancy)
+        with torch.no_grad():
+           gt_occ_dist = self.voxel_autoencoderkl.encode(input.occupancy)
         # with torch.no_grad():
         # pred_voxel = self.decode_latent_sample(model_output, input.voxel.shape[-3:])
         # loss, pos_weight = self.random_sample_voxel(model_output, voxel)
-        pos_weight = self.influence_radial_weight(input.occupancy)
+        pos_weight = self.influence_radial_weight(input.voxel)
         loss = (
-            F.binary_cross_entropy_with_logits(pred_occ, input.occupancy, pos_weight=pos_weight)
-            # + 0.001 * model_dist.kl_div(gt_occ_dist).mean()
+            F.binary_cross_entropy_with_logits(pred_occ, input.voxel, pos_weight=pos_weight)
+             + 0.0001 * model_dist.kl_div(gt_occ_dist).mean()
         )
         return MultiViewImageToVoxelPipelineOutput(
             pred_occ,
