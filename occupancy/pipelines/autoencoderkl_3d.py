@@ -286,17 +286,6 @@ class AutoEncoderKL3d(nn.Module):
             latent_dist,
             latent_dist.sample(),
         )
-        # latent_dists = self.encode(voxel)
-        # latent_samples = latent_dists.sample()
-        # pred_outputs = self.decode(latent_samples)
-        # kl_loss = input.kl_weight * latent_dists.kl_loss
-        # return AutoEncoderKL3dOutput(
-        #    pred_outputs,
-        #    input.voxel,
-        #    kl_loss,
-        #    latent_dists,
-        #    latent_samples,
-        # )
 
     @classmethod
     def from_config(cls, config: AutoEncoderKL3dConfig) -> "AutoEncoderKL3d":

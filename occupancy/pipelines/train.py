@@ -104,6 +104,56 @@ def config_dataloader(args: argparse.Namespace) -> DataLoader:
             return diffusion3d.config_dataloader(args)
 
 
+def to_human_readable(num: int) -> str:
+    if num < 1024:
+        return f"{num}"
+    elif num < 1024**2:
+        return f"{num / 1024:.2f}K"
+    elif num < 1024**3:
+        return f"{num / 1024 ** 2:.2f}M"
+    elif num < 1024**4:
+        return f"{num / 1024 ** 3:.2f}B"
+    else:
+        return f"{num / 1024 ** 4:.2f}T"
+
+
+def count_parameters(model: nn.Module) -> int:
+    total = sum(p.numel() for p in model.parameters())
+    total = to_human_readable(total)
+    return total
+
+
+from torch.optim.lr_scheduler import LRScheduler
+
+
+def cosine_warmup_lr(step: int, warmup_steps: int, total_steps: int, base_lr: float, min_lr: float = 1e-8) -> float:
+    if step < warmup_steps:
+        return 1e-8 + step / warmup_steps * base_lr
+    elif step < total_steps:
+        return max(
+            min_lr,
+            0.5 * (1 + math.cos(math.pi * (step - warmup_steps) / total_steps)) * base_lr,
+        )
+    else:
+        return min_lr
+
+
+class CosineWarmupLR(LRScheduler):
+    def __init__(
+        self, optimizer, warmup_steps: int, total_steps: int, min_lr: float = 1e-6, last_epoch=-1, verbose=False
+    ):
+        self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
+        self.min_lr = min_lr
+        super().__init__(optimizer, last_epoch, verbose)
+
+    def get_lr(self):
+        return [
+            cosine_warmup_lr(self._step_count, self.warmup_steps, self.total_steps, base_lr, self.min_lr)
+            for base_lr in self.base_lrs
+        ]
+
+
 def train(
     local_rank: int,
     args: argparse.Namespace,
@@ -117,6 +167,8 @@ def train(
         dist.init_process_group(backend="nccl", init_method="env://")
         torch.cuda.set_device(args.local_rank)
     model, model_input_cls = config_model(args)
+    total_params = count_parameters(model)
+    print(f"[rank {local_rank}] total params: {total_params}")
     if args.ddp:
         model = DDP(model, device_ids=[args.local_rank], gradient_as_bucket_view=True, static_graph=True)
     dl, sampler = config_dataloader(args)
@@ -139,7 +191,7 @@ def train(
             eps=1e-8,
         )
     total_steps = 2 * len(dl) // args.grad_accum
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, total_steps)
+    scheduler = CosineWarmupLR(optimizer, 1000, total_steps)
     args.model_name = f"{args.model}-cls{args.num_classes}"
     with wandb.init(
         project="occupancy",
@@ -191,18 +243,6 @@ def train(
                         os.path.join(args.save_dir, f"{args.model_name}.pt"),
                     )
                 step += 1
-
-
-def warmup_cosine_lr(step: int, warmup_steps: int, total_steps: int, min_factor: float = 0.01) -> float:
-    if step < warmup_steps:
-        return 1e-8 + step / warmup_steps
-    elif step < total_steps:
-        return max(
-            min_factor,
-            0.5 * (1 + math.cos(math.pi * (step - warmup_steps) / total_steps)),
-        )
-    else:
-        return min_factor
 
 
 if __name__ == "__main__":
