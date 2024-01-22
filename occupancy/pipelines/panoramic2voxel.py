@@ -284,36 +284,34 @@ class TransformerPlane2Polar(nn.Module):
         num_layers: int,
     ):
         super().__init__()
+        self.in_channels = in_channels
         self.hidden_size = hidden_size
-        self.depth_channels = radius_channels
-        self.in_conv = nn.Conv2d(in_channels, hidden_size * radius_channels, patch_size, stride=patch_size)
+        self.radius_channels = radius_channels
+        self.in_conv = nn.Conv2d(in_channels, in_channels * radius_channels, patch_size, stride=patch_size)
+        self.encoder = UnetAttentionEncoder3d(in_channels, hidden_size, 128, 2, 3, 128)
         self.transformer = Transformer(hidden_size, num_layers, hidden_size // 128, 128)
-        # self.out_norm = SpatialRMSNorm(hidden_size)
-        # self.nonlinear = nn.SiLU(True)
         self.out_conv = UnetAttention3d(hidden_size, out_channels, 1024, 512, 2, 2, 2, 128)
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
         batch_size = multiview.shape[0]
         num_images = multiview.shape[1]
-        multiview = self.in_conv(multiview.flatten(0, 1))
+        multiview_polar = torch.cat(multiview.unbind(1), dim=-1)
+        multiview = self.in_conv(multiview)
         multiview = multiview.view(
             batch_size,
             num_images,
-            self.hidden_size,
-            self.depth_channels,
+            self.in_channels,
+            self.radius_channels,
             *multiview.shape[2:],
         )
-        multiview_polar = torch.cat(multiview.unbind(1), dim=-1)
+        multiview = self.encoder(multiview)
         multiview_polar = (
             self.transformer(multiview_polar.flatten(2).transpose(-1, -2)).transpose(-1, -2).view_as(multiview_polar)
         )
-        # multiview_polar = self.out_conv(multiview_polar)
 
         multiview_polar = ops.transforms.view_as_cartesian(
             multiview_polar, out_shape, "bilinear", align_corners=True  # to fix the geometry relationship
         )
-        # multiview_polar = self.out_norm(multiview_polar)
-        # multiview_polar = self.nonlinear(multiview_polar)
         multiview_polar = self.out_conv(multiview_polar)
         return multiview_polar
 
@@ -382,7 +380,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         #    self.image_autoencoderkl.config.latent_channels, 8, 512, 8
         # )
         self.plane2polar = TransformerPlane2Polar(
-            4, self.voxel_encoder_latent_dim * 2, self.plane2polar_depth_channels, 8, 1024, 16
+            4, self.voxel_encoder_latent_dim, self.plane2polar_depth_channels, 8, 1024, 16
         )
         # self.decoder = UnetConditionalAttention3d(
         #    512,
@@ -492,9 +490,9 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             with torch.no_grad():
                 input.images.data = self.image_augmentation(input.images.data.float()).type_as(input.images.data)
 
-        model_dist = self.prepare_multiview(input.images, (32, 32, 4))
-        model_dist = GaussianDistribution.from_latent(model_dist, latent_scale=self.voxel_autoencoderkl.latent_scale)
-        model_output = model_dist.sample()
+        model_output = self.prepare_multiview(input.images, (32, 32, 4))
+        #model_dist = GaussianDistribution.from_latent(model_dist, latent_scale=self.voxel_autoencoderkl.latent_scale)
+        #model_output = model_dist.sample()
 
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
         with torch.no_grad():
@@ -505,7 +503,6 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         pos_weight = self.influence_radial_weight(input.occupancy)
         loss = (
             F.binary_cross_entropy_with_logits(pred_occ, input.occupancy, pos_weight=pos_weight)
-            + 0.0001 * model_dist.kl_div(gt_occ_dist).mean()
         )
         return MultiViewImageToVoxelPipelineOutput(
             pred_occ,
