@@ -16,8 +16,8 @@ def cartesian_to_polar(x: Tensor, y: Tensor, z: Tensor) -> Tuple[Tensor, Tensor,
 @torch.jit.script
 def polar_to_cartesian(r: Tensor, theta: Tensor, phi: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     # r: 0~1
-    # theta: -pi~pi
-    # phi: -pi/2~pi/2
+    # theta: -pi/2~pi/2
+    # phi: -pi~pi
     x = r * torch.cos(phi) * torch.cos(theta)
     y = r * torch.cos(phi) * torch.sin(theta)
     z = r * torch.sin(phi) * torch.sign(phi)
@@ -27,7 +27,11 @@ def polar_to_cartesian(r: Tensor, theta: Tensor, phi: Tensor) -> Tuple[Tensor, T
 
 @torch.jit.script
 def view_as_polar(
-    pointcloud: Tensor, out_shape: Tuple[int, int, int] = (256, 256, 256), mode: str = "nearest", padding_mode: str = "zeros", align_corners: bool = True
+    pointcloud: Tensor,
+    out_shape: Tuple[int, int, int] = (256, 256, 256),
+    mode: str = "nearest",
+    padding_mode: str = "zeros",
+    align_corners: bool = True,
 ):
     r, theta, phi = torch.meshgrid(
         torch.linspace(0, 1, out_shape[0]),
@@ -50,6 +54,7 @@ def view_as_cartesian(
     mode: str = "nearest",
     padding_mode: str = "zeros",
     align_corners: bool = False,
+    scale: float = 1.0,
 ):
     x, y, z = torch.meshgrid(
         torch.linspace(-1, 1, out_shape[0], device=pointcloud.device, dtype=torch.float32),
@@ -58,12 +63,16 @@ def view_as_cartesian(
         indexing="ij",
     )
     r, theta, phi = cartesian_to_polar(x, y, z)
-    r = r / math.sqrt(3) * 2 - 1
-    theta = theta / torch.pi * 2 - 1
+    r_max = math.sqrt(3)
+    r = r * 2 / r_max - 1
+    theta = theta * 2 / torch.pi - 1
     phi = phi / torch.pi
+    r = r * scale
 
     grid = torch.stack([r, theta, phi], dim=-1)
     grid = grid.unsqueeze(0).expand(pointcloud.shape[0], -1, -1, -1, -1)
 
-    polar_view = F.grid_sample(pointcloud.type(torch.float32), grid, mode=mode, padding_mode=padding_mode, align_corners=align_corners).type_as(pointcloud)
+    polar_view = F.grid_sample(
+        pointcloud.type(torch.float32), grid, mode=mode, padding_mode=padding_mode, align_corners=align_corners
+    ).type_as(pointcloud)
     return polar_view

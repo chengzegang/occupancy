@@ -165,7 +165,7 @@ class MultiViewImageToVoxelPipelineOutput:
     @property
     @torch.jit.unused
     def iou(self):
-        return ops.iou(self.prediction.flatten() >= 0, self.ground_truth.flatten() > 0, 2, 0)
+        return ops.iou(self.prediction.flatten() >= 0, self.occupancy.flatten() > 0, 2, 0)
 
     @property
     @torch.jit.unused
@@ -309,7 +309,9 @@ class TransformerPlane2Polar(nn.Module):
         )
         # multiview_polar = self.out_conv(multiview_polar)
 
-        multiview_polar = ops.transforms.view_as_cartesian(multiview_polar, out_shape, "bilinear", align_corners=False)
+        multiview_polar = ops.transforms.view_as_cartesian(
+            multiview_polar, out_shape, "bilinear", align_corners=True  # to fix the geometry relationship
+        )
         # multiview_polar = self.out_norm(multiview_polar)
         # multiview_polar = self.nonlinear(multiview_polar)
         multiview_polar = self.out_conv(multiview_polar)
@@ -349,7 +351,7 @@ class UnetPlane2Polar(nn.Module):
         multiview_polar = torch.cat(multiview.unbind(1), dim=-1)
         multiview_polar = self.unet(multiview_polar)
 
-        multiview_polar = ops.transforms.view_as_cartesian(multiview_polar, out_shape, "bilinear", align_corners=False)
+        multiview_polar = ops.transforms.view_as_cartesian(multiview_polar, out_shape, "bilinear", align_corners=True)
         return multiview_polar
 
 
@@ -418,7 +420,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
     def prepare_multiview(self, images, voxel_shape) -> Tensor:
         batch_size = images.shape[0]
         num_images = images.shape[1]
-        # images = images[:, torch.randperm(num_images)]
+        images = images[:, torch.randperm(num_images)]
         with torch.no_grad():
             multiview_sample = self.prepare_image(images.flatten(0, 1))
         # multiview_features = self.image_encoder(multiview_sample)
@@ -496,14 +498,14 @@ class MultiViewImageToVoxelPipeline(nn.Module):
 
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
         with torch.no_grad():
-           gt_occ_dist = self.voxel_autoencoderkl.encode(input.occupancy)
+            gt_occ_dist = self.voxel_autoencoderkl.encode(input.occupancy)
         # with torch.no_grad():
         # pred_voxel = self.decode_latent_sample(model_output, input.voxel.shape[-3:])
         # loss, pos_weight = self.random_sample_voxel(model_output, voxel)
-        pos_weight = self.influence_radial_weight(input.voxel)
+        pos_weight = self.influence_radial_weight(input.occupancy)
         loss = (
-            F.binary_cross_entropy_with_logits(pred_occ, input.voxel, pos_weight=pos_weight)
-             + 0.0001 * model_dist.kl_div(gt_occ_dist).mean()
+            F.binary_cross_entropy_with_logits(pred_occ, input.occupancy, pos_weight=pos_weight)
+            + 0.0001 * model_dist.kl_div(gt_occ_dist).mean()
         )
         return MultiViewImageToVoxelPipelineOutput(
             pred_occ,
