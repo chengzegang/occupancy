@@ -170,6 +170,7 @@ class MultiViewImageToVoxelPipelineOutput:
     @property
     @torch.jit.unused
     def figure(self) -> plt.Figure:
+        plt.close("all")
         occupancy = self.occupancy
         oi, oj, ok = torch.where(occupancy[0, 0].detach().cpu() > 0)
         oc = occupancy[0, 0, oi, oj, ok].detach().cpu()
