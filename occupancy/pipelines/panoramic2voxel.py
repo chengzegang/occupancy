@@ -279,14 +279,14 @@ class MultiViewImageToVoxelModel(nn.Module):
         out_channels: int = 16,
         radius_channels: int = 8,
         patch_size: int = 8,
-        hidden_size: int = 1024,
+        hidden_size: int = 512,
         head_size: int = 128,
-        encoder_base_channels: int = 256,
-        refiner_base_channels: int = 256,
-        num_encoder_layers: int = 2,
-        num_encoder_attention_layers: int = 2,
+        encoder_base_channels: int = 128,
+        refiner_base_channels: int = 128,
+        num_encoder_layers: int = 3,
+        num_encoder_attention_layers: int = 4,
         num_refiner_layers: int = 2,
-        num_refiner_attention_layers: int = 6,
+        num_refiner_attention_layers: int = 4,
         multiplier: int = 2,
     ):
         super().__init__()
@@ -326,6 +326,16 @@ class MultiViewImageToVoxelModel(nn.Module):
             *patch_embeds.shape[1:],
         )
         patch_embeds = torch.cat(patch_embeds.unbind(1), dim=-1)
+        height, width = multiview.shape[-2:]
+        target_width = 2 ** math.floor(math.log2(width))
+        multiview = F.interpolate(
+            multiview.flatten(0, 1), scale_factor=target_width / width, mode="bilinear", align_corners=False
+        )
+        height, width = multiview.shape[-2:]
+        multiview = multiview.view(batch_size, num_images, *multiview.shape[1:])
+        target_height = width * num_images // 2
+        multiview = F.pad(multiview, (0, 0, target_height - height, 0), "constant", 0)
+
         multiview = self.encoder(multiview.flatten(0, 1))
         multiview = multiview.view(
             batch_size,
