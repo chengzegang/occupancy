@@ -279,10 +279,10 @@ class MultiViewImageToVoxelModel(nn.Module):
         out_channels: int = 16,
         radius_channels: int = 8,
         patch_size: int = 8,
-        hidden_size: int = 512,
+        hidden_size: int = 1024,
         head_size: int = 128,
-        encoder_base_channels: int = 128,
-        refiner_base_channels: int = 128,
+        encoder_base_channels: int = 256,
+        refiner_base_channels: int = 256,
         num_encoder_layers: int = 3,
         num_encoder_attention_layers: int = 4,
         num_refiner_layers: int = 2,
@@ -293,8 +293,9 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.in_channels = in_channels
         self.hidden_size = hidden_size
         self.radius_channels = radius_channels
+        self.pre_interpolate_conv = nn.Conv2d(in_channels, encoder_base_channels, 1)
         self.encoder = UnetAttention2d(
-            in_channels,
+            encoder_base_channels,
             hidden_size * radius_channels,
             hidden_size,
             encoder_base_channels,
@@ -326,25 +327,22 @@ class MultiViewImageToVoxelModel(nn.Module):
             *patch_embeds.shape[1:],
         )
         patch_embeds = torch.cat(patch_embeds.unbind(1), dim=-1)
-        height, width = multiview.shape[-2:]
-        target_width = 2 ** math.floor(math.log2(width))
-        multiview = F.interpolate(
-            multiview.flatten(0, 1), scale_factor=target_width / width, mode="bilinear", align_corners=False
-        )
-        height, width = multiview.shape[-2:]
-        multiview = multiview.view(batch_size, num_images, *multiview.shape[1:])
-        target_height = width * num_images // 2
-        multiview = F.pad(multiview, (0, 0, target_height - height, 0), "constant", 0)
 
-        multiview = self.encoder(multiview.flatten(0, 1))
+        multiview = torch.cat(multiview.unbind(1), dim=-1)
+        height, width = multiview.shape[-2:]
+        factor = 2**3
+        target_width = height // factor * factor * 2
+        multiview = self.pre_interpolate_conv(multiview)
+        multiview = F.interpolate(
+            multiview, size=(target_width // 2, target_width), mode="bilinear", align_corners=False
+        )
+        multiview = self.encoder(multiview)
         multiview = multiview.view(
             batch_size,
-            num_images,
             self.hidden_size,
             self.radius_channels,
-            *multiview.shape[2:],
+            *multiview.shape[-2:],
         )
-        multiview = torch.cat(multiview.unbind(1), dim=-1)
         multiview = ops.transforms.view_as_cartesian(multiview, out_shape, "bilinear", align_corners=False)
         multiview = self.refiner(multiview, patch_embeds)
         return multiview
