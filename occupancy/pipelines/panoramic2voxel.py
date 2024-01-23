@@ -33,7 +33,7 @@ from torch.optim import AdamW
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import wandb
-from occupancy.models.unet_2d import SpatialRMSNorm, Unet2d, UnetEncoder2d
+from occupancy.models.unet_2d import SpatialRMSNorm, Unet2d, UnetEncoder2d, unet_decoder2d, unet_encoder2d
 from occupancy.models.unet_3d import UnetEncoder3d, UnetLatentAttention3d
 from .autoencoderkl_3d import AutoEncoderKL3d, GaussianDistribution
 import torchvision.transforms.v2 as T
@@ -272,6 +272,30 @@ class VisionTransformerFeatureExtractor(nn.Module):
         return embeds
 
 
+class PanoramicUnet2d(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        latent_dim: int,
+        base_channels: int = 64,
+        multiplier: int = 2,
+        num_layers: int = 3,
+        num_attention_layers: int = 4,
+    ):
+        super().__init__()
+        self.encoder = unet_encoder2d(in_channels, latent_dim, base_channels, multiplier, num_layers)
+        self.latent_transformer = Transformer(latent_dim, num_attention_layers, latent_dim // 128, 128)
+        self.decoder = unet_decoder2d(out_channels, latent_dim, base_channels, multiplier, num_layers)
+
+    def forward(self, voxel_inputs: Tensor) -> Tensor:
+        latent = self.encoder(voxel_inputs)
+        height, width = latent.shape[-2:]
+        latent = F.interpolate(latent, size=(height, height * 2), mode="bilinear", align_corners=False)
+        latent = self.latent_transformer(latent.flatten(2).transpose(-1, -2)).transpose(-1, -2).view_as(latent)
+        return self.decoder(latent)
+
+
 class MultiViewImageToVoxelModel(nn.Module):
     def __init__(
         self,
@@ -293,16 +317,15 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.in_channels = in_channels
         self.hidden_size = hidden_size
         self.radius_channels = radius_channels
-        self.pre_interpolate_conv = nn.Conv2d(in_channels, encoder_base_channels, 1)
-        self.encoder = UnetAttention2d(
-            encoder_base_channels,
+        self.encoder = PanoramicUnet2d(
+            in_channels,
             hidden_size * radius_channels,
             hidden_size,
             encoder_base_channels,
             multiplier,
             num_encoder_layers,
             num_encoder_attention_layers,
-            head_size,
+            # head_size,
         )
         self.patch_conv = nn.Conv2d(in_channels, hidden_size, patch_size, stride=patch_size)
         self.refiner = UnetConditionalAttention3d(
@@ -329,13 +352,6 @@ class MultiViewImageToVoxelModel(nn.Module):
         patch_embeds = torch.cat(patch_embeds.unbind(1), dim=-1)
 
         multiview = torch.cat(multiview.unbind(1), dim=-1)
-        height, width = multiview.shape[-2:]
-        factor = 2**3
-        target_width = height // factor * factor * 2
-        multiview = self.pre_interpolate_conv(multiview)
-        multiview = F.interpolate(
-            multiview, size=(target_width // 2, target_width), mode="bilinear", align_corners=False
-        )
         multiview = self.encoder(multiview)
         multiview = multiview.view(
             batch_size,
