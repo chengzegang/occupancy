@@ -347,6 +347,7 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.hidden_size = 512
         self.radius_channels = radius_channels
         self.encoder = UnetEncoder2d(4, self.hidden_size, 256, 2, 2)
+        self.grid_embeds = nn.Conv3d(3, self.hidden_size, 3, padding=1)
         self.transformer = Transformer(self.hidden_size, 24, self.hidden_size // 128, 128)
         self.patch_embeds = nn.Conv2d(4, self.hidden_size, 8, stride=8)
         self.decoder = UnetConditionalAttentionDecoderWithoutShortcut3d(
@@ -359,11 +360,15 @@ class MultiViewImageToVoxelModel(nn.Module):
         patch_embeds = self.patch_embeds(multiview)
         desired_shape = (out_shape[0] // 4, out_shape[1] // 4, out_shape[2] // 4)
         desired_numel = desired_shape[0] * desired_shape[1] * desired_shape[2]
-        placeholder_embeds = torch.randn(
-            latent.shape[0], desired_numel, self.hidden_size, device=latent.device, dtype=latent.dtype
-        ).clamp(-1, 1)
-        latent = latent.flatten(2).transpose(-1, -2)
-        latent = torch.cat([placeholder_embeds, latent], dim=1)
+        i, j, k = torch.meshgrid(
+            torch.linspace(-1, 1, desired_shape[0], device=multiview.device, dtype=multiview.dtype),
+            torch.linspace(-1, 1, desired_shape[1], device=multiview.device, dtype=multiview.dtype),
+            torch.linspace(-1, 1, desired_shape[2], device=multiview.device, dtype=multiview.dtype),
+            indexing="ij",
+        )
+        ijk = torch.stack([i, j, k], dim=0).unsqueeze(0)
+        grid_embeds = self.grid_embeds(ijk).expand(latent.shape[0], -1, -1, -1, -1)
+        latent = torch.cat([grid_embeds.flatten(2).transpose(-1, -2), latent.flatten(2).transpose(-1, -2)], dim=1)
         latent = self.transformer(latent)[:, :desired_numel].transpose(-1, -2).view(latent.shape[0], -1, *desired_shape)
         output = self.decoder(latent, patch_embeds)
         return output
