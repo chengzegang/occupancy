@@ -335,9 +335,7 @@ class MultiViewImageToVoxelModel(nn.Module):
             *multiview.shape[2:],
         )
         multiview = torch.cat(multiview.unbind(1), dim=-1)
-        multiview = ops.transforms.view_as_cartesian(
-            multiview, out_shape, "bilinear", align_corners=True  # to fix the geometry relationship
-        )
+        multiview = ops.transforms.view_as_cartesian(multiview, out_shape, "bilinear", align_corners=False)
         multiview = self.refiner(multiview, patch_embeds)
         return multiview
 
