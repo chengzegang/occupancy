@@ -173,10 +173,11 @@ def record(run, output, model: nn.Module, args: argparse.Namespace, step: int):
     prediction = prediction.cpu().permute(1, 2, 0)
     ground_truth = output.ground_truth[0, 0] > 0
     ground_truth = ground_truth.cpu().permute(1, 2, 0)
-    save_as_obj(prediction, f"{args.model_name}_prediction.obj")
-    save_as_obj(ground_truth, f"{args.model_name}_ground_truth.obj")
-    run.log({"prediction": wandb.Object3D(f"{args.model_name}_prediction.obj")}, step=step)
-    run.log({"ground_truth": wandb.Object3D(f"{args.model_name}_ground_truth.obj")}, step=step)
+    if prediction.sum() > 0:
+        save_as_obj(prediction, f"{args.model_name}_prediction.obj")
+        save_as_obj(ground_truth, f"{args.model_name}_ground_truth.obj")
+        run.log({"prediction": wandb.Object3D(f"{args.model_name}_prediction.obj")}, step=step)
+        run.log({"ground_truth": wandb.Object3D(f"{args.model_name}_ground_truth.obj")}, step=step)
 
 
 def save_as_obj(voxel: Tensor, path: str):

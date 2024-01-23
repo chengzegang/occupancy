@@ -186,6 +186,32 @@ class UnetConditionalAttentionEncoder3d(nn.Module):
         return latent, hidden_states
 
 
+class UnetConditionalAttentionDecoderLayerWithoutShortcut3d(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, condition_size: int, num_heads: int, head_size: int):
+        super().__init__()
+        self.shortcut = nn.Conv3d(
+            in_channels,
+            in_channels,
+            kernel_size=1,
+        )
+        self.attention = ConditionalAttention3d(in_channels, condition_size, num_heads, head_size)
+        self.upsample = nn.ConvTranspose3d(
+            in_channels,
+            out_channels,
+            kernel_size=2,
+            stride=2,
+        )
+        self.convolution = UnetConvolution3d(out_channels, out_channels)
+
+        self.shortcut.weight.data.zero_()
+
+    def forward(self, input_embeds: Tensor, condition_embeds: Tensor) -> Tensor:
+        input_embeds = self.attention(input_embeds, condition_embeds)
+        input_embeds = self.upsample(input_embeds)
+        input_embeds = self.convolution(input_embeds)
+        return input_embeds
+
+
 class UnetConditionalAttentionDecoderLayer3d(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, condition_size: int, num_heads: int, head_size: int):
         super().__init__()
@@ -211,6 +237,61 @@ class UnetConditionalAttentionDecoderLayer3d(nn.Module):
         input_embeds = self.upsample(input_embeds)
         input_embeds = self.convolution(input_embeds)
         return input_embeds
+
+
+class UnetConditionalAttentionDecoderWithoutShortcut3d(nn.Module):
+    def __init__(
+        self,
+        out_channels: int,
+        latent_dim: int,
+        condition_size: int,
+        base_channels: int = 64,
+        multiplier: int = 2,
+        num_layers: int = 3,
+        head_size: int = 64,
+    ):
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.out_channels = out_channels
+        _in_channels = [int(base_channels * multiplier**i) for i in range(num_layers, 0, -1)]
+        _out_channels = [int(base_channels * multiplier**i) for i in range(num_layers - 1, -1, -1)]
+
+        self.layers = nn.ModuleList()
+
+        self.in_conv = nn.Conv3d(
+            latent_dim,
+            _in_channels[0],
+            kernel_size=1,
+        )
+        self.in_attention = ConditionalAttention3d(
+            _in_channels[0],
+            condition_size,
+            _in_channels[0] // head_size,
+            head_size,
+        )
+        for i in range(num_layers):
+            self.layers.append(
+                UnetConditionalAttentionDecoderLayerWithoutShortcut3d(
+                    _in_channels[i], _out_channels[i], condition_size, _in_channels[i] // head_size, head_size
+                )
+            )
+        self.out_norm = SpatialRMSNorm(_out_channels[-1])
+        self.out_conv = nn.Conv3d(
+            _out_channels[-1],
+            out_channels,
+            kernel_size=1,
+        )
+        self.nonlinear = nn.SiLU(True)
+
+    def forward(self, latents: Tensor, condition_embeds: Tensor) -> Tensor:
+        hidden_states = self.in_conv(latents)
+        hidden_states = self.in_attention(hidden_states, condition_embeds)
+        for index, layer in enumerate(self.layers):
+            hidden_states = layer(hidden_states, condition_embeds)
+        logits = self.out_norm(hidden_states)
+        logits = self.nonlinear(logits)
+        logits = self.out_conv(logits)
+        return logits
 
 
 class UnetConditionalAttentionDecoder3d(nn.Module):
