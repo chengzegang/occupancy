@@ -347,10 +347,10 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.hidden_size = 512
         self.radius_channels = radius_channels
         self.encoder = UnetEncoder2d(4, self.hidden_size, 256, 2, 2)
-        self.transformer = Transformer(self.hidden_size, 16, self.hidden_size // 128, 128)
+        self.transformer = Transformer(self.hidden_size, 24, self.hidden_size // 128, 128)
         self.patch_embeds = nn.Conv2d(4, self.hidden_size, 8, stride=8)
         self.decoder = UnetConditionalAttentionDecoderWithoutShortcut3d(
-            16, self.hidden_size, self.hidden_size, 256, 2, 2, 128
+            out_channels, self.hidden_size, self.hidden_size, 256, 2, 2, 128
         )
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
