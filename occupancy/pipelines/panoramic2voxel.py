@@ -331,7 +331,6 @@ class MultiViewImageToVoxelModel(nn.Module):
         in_channels: int = 4,
         out_channels: int = 16,
         radius_channels: int = 8,
-        patch_size: int = 8,
         hidden_size: int = 1024,
         head_size: int = 128,
         encoder_base_channels: int = 256,
@@ -344,7 +343,7 @@ class MultiViewImageToVoxelModel(nn.Module):
     ):
         super().__init__()
         self.in_channels = in_channels
-        self.hidden_size = 512
+        self.hidden_size = 1536
         self.radius_channels = radius_channels
         self.encoder = UnetEncoder2d(4, self.hidden_size, 256, 2, 2)
         self.grid_embeds = nn.Conv3d(3, self.hidden_size, 3, padding=1)
