@@ -10,13 +10,15 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import wandb
-from torch import nn
+from torch import Tensor, nn
 from torch.distributed.optim import ZeroRedundancyOptimizer as ZeRO
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import threading
+
+from trimesh.voxel.ops import matrix_to_marching_cubes
 from . import autoencoderkl_3d, panoramic2voxel, diffusion3d
 
 torch.backends.cudnn.enabled = True
@@ -171,7 +173,24 @@ def record(run, output, model: nn.Module, args: argparse.Namespace, step: int):
         fig.savefig(f"{args.model_name}.png")
         run.log({"output": wandb.Image(fig)}, step=step)
         plt.close(fig)
+        prediction = output.prediction[0, 0] > 0
+        prediction = prediction.cpu().permute(1, 2, 0)
+
+        ground_truth = output.ground_truth[0, 0] > 0
+        ground_truth = ground_truth.cpu().permute(1, 2, 0)
+
+        save_as_obj(prediction, f"{args.model_name}_prediction.obj")
+        save_as_obj(ground_truth, f"{args.model_name}_ground_truth.obj")
+
+        run.log({"prediction": wandb.Object3D(f"{args.model_name}_prediction.obj")}, step=step)
+        run.log({"ground_truth": wandb.Object3D(f"{args.model_name}_ground_truth.obj")}, step=step)
     t.join()
+
+
+def save_as_obj(voxel: Tensor, path: str):
+    voxel = voxel.numpy()
+    mesh = matrix_to_marching_cubes(voxel)
+    mesh.export(path)
 
 
 def train(

@@ -165,3 +165,4 @@ models/*
 wandb/
 !models/autoencoderkl-*
 !models/panoramic2voxel-*
+*.obj

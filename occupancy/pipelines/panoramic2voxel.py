@@ -161,6 +161,7 @@ class MultiViewImageToVoxelPipelineOutput:
         self.images = images
         self.loss = loss
         self.pos_weight = pos_weight
+        self.ground_truth = self.full
 
     @property
     @torch.jit.unused
