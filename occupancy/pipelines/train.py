@@ -164,27 +164,19 @@ def save_state_dict(state_dict: dict, path: str):
 def record(run, output, model: nn.Module, args: argparse.Namespace, step: int):
     model.eval()
     state_dict = model.state_dict() if not isinstance(model, DDP) else model.module.state_dict()
-    t = threading.Thread(
-        target=save_state_dict, args=(state_dict, os.path.join(args.save_dir, f"{args.model_name}.pt"))
-    )
-    t.start()
-    if threading.current_thread() == threading.main_thread():
-        fig = output.figure
-        fig.savefig(f"{args.model_name}.png")
-        run.log({"output": wandb.Image(fig)}, step=step)
-        plt.close(fig)
-        prediction = output.prediction[0, 0] > 0
-        prediction = prediction.cpu().permute(1, 2, 0)
-
-        ground_truth = output.ground_truth[0, 0] > 0
-        ground_truth = ground_truth.cpu().permute(1, 2, 0)
-
-        save_as_obj(prediction, f"{args.model_name}_prediction.obj")
-        save_as_obj(ground_truth, f"{args.model_name}_ground_truth.obj")
-
-        run.log({"prediction": wandb.Object3D(f"{args.model_name}_prediction.obj")}, step=step)
-        run.log({"ground_truth": wandb.Object3D(f"{args.model_name}_ground_truth.obj")}, step=step)
-    t.join()
+    save_state_dict(state_dict, os.path.join(args.save_dir, f"{args.model_name}.pt"))
+    fig = output.figure
+    fig.savefig(f"{args.model_name}.png")
+    run.log({"output": wandb.Image(fig)}, step=step)
+    plt.close(fig)
+    prediction = output.prediction[0, 0] > 0
+    prediction = prediction.cpu().permute(1, 2, 0)
+    ground_truth = output.ground_truth[0, 0] > 0
+    ground_truth = ground_truth.cpu().permute(1, 2, 0)
+    save_as_obj(prediction, f"{args.model_name}_prediction.obj")
+    save_as_obj(ground_truth, f"{args.model_name}_ground_truth.obj")
+    run.log({"prediction": wandb.Object3D(f"{args.model_name}_prediction.obj")}, step=step)
+    run.log({"ground_truth": wandb.Object3D(f"{args.model_name}_ground_truth.obj")}, step=step)
 
 
 def save_as_obj(voxel: Tensor, path: str):

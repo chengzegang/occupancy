@@ -286,7 +286,7 @@ class MultiViewImageToVoxelModel(nn.Module):
         num_encoder_layers: int = 2,
         num_encoder_attention_layers: int = 2,
         num_refiner_layers: int = 2,
-        num_refiner_attention_layers: int = 2,
+        num_refiner_attention_layers: int = 8,
         multiplier: int = 2,
     ):
         super().__init__()
