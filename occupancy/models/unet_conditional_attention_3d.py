@@ -275,22 +275,22 @@ class UnetConditionalAttentionDecoderWithoutShortcut3d(nn.Module):
                     _in_channels[i], _out_channels[i], condition_size, _in_channels[i] // head_size, head_size
                 )
             )
-        self.out_norm = SpatialRMSNorm(_out_channels[-1])
+        # self.out_norm = SpatialRMSNorm(_out_channels[-1])
         self.out_conv = nn.Conv3d(
             _out_channels[-1],
             out_channels,
             kernel_size=1,
         )
-        self.nonlinear = nn.SiLU(True)
+        # self.nonlinear = nn.SiLU(True)
 
     def forward(self, latents: Tensor, condition_embeds: Tensor) -> Tensor:
         hidden_states = self.in_conv(latents)
         hidden_states = self.in_attention(hidden_states, condition_embeds)
         for index, layer in enumerate(self.layers):
             hidden_states = layer(hidden_states, condition_embeds)
-        logits = self.out_norm(hidden_states)
-        logits = self.nonlinear(logits)
-        logits = self.out_conv(logits)
+        # logits = self.out_norm(hidden_states)
+        # logits = self.nonlinear(logits)
+        logits = self.out_conv(hidden_states)
         return logits
 
 

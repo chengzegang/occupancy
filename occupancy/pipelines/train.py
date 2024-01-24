@@ -213,7 +213,7 @@ def train(
             AdamW,
             lr=args.lr,
             weight_decay=args.weight_decay,
-            betas=(0.9, 0.999),
+            betas=(0.9, 0.96),
             eps=1e-8,
             parameters_as_bucket_view=True,
         )
@@ -222,7 +222,7 @@ def train(
             model.parameters(),
             lr=args.lr,
             weight_decay=args.weight_decay,
-            betas=(0.9, 0.999),
+            betas=(0.9, 0.96),
             eps=1e-8,
         )
     total_steps = 2 * len(dl) // args.grad_accum

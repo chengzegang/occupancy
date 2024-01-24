@@ -345,9 +345,9 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.in_channels = in_channels
         self.hidden_size = 1536
         self.radius_channels = radius_channels
-        self.encoder = UnetEncoder2d(4, self.hidden_size, 256, 2, 2)
+        self.encoder = UnetEncoder2d(4, self.hidden_size, 256, 2, 2, out_norm=False)
         self.grid_embeds = nn.Conv3d(3, self.hidden_size, 3, padding=1)
-        self.transformer = Transformer(self.hidden_size, 24, self.hidden_size // 128, 128)
+        self.transformer = Transformer(self.hidden_size, 16, self.hidden_size // 128, 128)
         self.decoder = UnetConditionalAttentionDecoderWithoutShortcut3d(
             out_channels, self.hidden_size, self.hidden_size, 256, 2, 2, 128
         )
