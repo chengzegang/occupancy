@@ -284,7 +284,7 @@ if __name__ == "__main__":
     parser.add_argument("--weight-decay", type=float, default=1e-5)
     parser.add_argument("--total-epochs", type=int, default=100)
     parser.add_argument("--num-classes", type=int, default=1)
-    parser.add_argument("--warmup-steps", type=int, default=1000)
+    parser.add_argument("--warmup-steps", type=int, default=0)
 
     args = parser.parse_args()
     match args.dtype:

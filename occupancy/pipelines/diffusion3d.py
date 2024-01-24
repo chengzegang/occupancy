@@ -26,7 +26,10 @@ from tqdm import tqdm
 
 from occupancy import ops
 from occupancy.datasets.nuscenes import NuScenesDataset, NuScenesDatasetItem, NuScenesImage, NuScenesOccupancyDataset
+from occupancy.models.transformer import Transformer
+from occupancy.models.unet_2d import UnetEncoder2d
 from occupancy.models.unet_3d import UnetDecoder3d, UnetEncoder3d
+from occupancy.models.unet_conditional_attention_3d import UnetConditionalAttentionDecoderWithoutShortcut3d
 from occupancy.models.unet_conditional_attention_timestep_3d import UnetConditionalAttention3d
 from occupancy.pipelines.panoramic2voxel import VisionTransformerFeatureExtractor
 from .autoencoderkl_3d import (
@@ -43,10 +46,12 @@ from diffusers import AutoencoderKL, DDIMScheduler
 class Diffusion3dInput:
     images: Tensor
     voxel: Tensor
+    occupancy: Tensor
 
-    def __init__(self, images: Tensor, voxel: Tensor):
+    def __init__(self, images: Tensor, voxel: Tensor, occupancy: Tensor):
         self.images = images
         self.voxel = voxel
+        self.occupancy = occupancy
 
     @classmethod
     def from_nuscenes_dataset_item(
@@ -72,19 +77,23 @@ class Diffusion3dInput:
         images.translation = images.translation.to(device=device, dtype=dtype, non_blocking=True)
         batch.lidar_top.location = batch.lidar_top.location.to(device=device, dtype=dtype, non_blocking=True)
         batch.lidar_top.attribute = batch.lidar_top.attribute.to(device=device, non_blocking=True)
-
+        occupancy = batch.lidar_top.occupancy.to(device=device, dtype=dtype, non_blocking=True)
         voxel = batch.lidar_top.voxel.to(device=device, dtype=dtype, non_blocking=True)
         model_input = cls(
             images=images.data,
             voxel=voxel,
+            occupancy=occupancy,
         )
         return model_input
 
 
 class Diffusion3dOutput:
     prediction: Tensor
-    ground_truth: Tensor
+    observable: Tensor
+    full: Tensor
+    images: Tensor
     loss: Optional[Tensor] = None
+    pos_weight: Optional[Tensor] = None
 
     _CMAP = np.asarray(
         [  # RGB.
@@ -113,52 +122,132 @@ class Diffusion3dOutput:
         self,
         prediction: Tensor,
         ground_truth: Tensor,
+        occupancy: Tensor,
+        images: Tensor,
         loss: Optional[Tensor] = None,
+        pos_weight=None,
     ):
         self.prediction = prediction
-        self.ground_truth = ground_truth
+        self.observable = ground_truth
+        self.full = occupancy
+        self.images = images
         self.loss = loss
+        self.pos_weight = pos_weight
+        self.ground_truth = self.full
 
     @property
     @torch.jit.unused
     def iou(self):
-        return ops.iou(self.prediction.flatten() >= 0, self.ground_truth.flatten() > 0, 2, 0)
+        return ops.iou(self.prediction.flatten() >= 0, self.full.flatten() > 0, 2, 0)
 
     @property
     @torch.jit.unused
     def figure(self) -> plt.Figure:
-        ground_truth = self.ground_truth
-        i, j, k = torch.where(ground_truth[0, 0].detach().cpu() > 0)
-        c = ground_truth[0, 0, i, j, k].detach().cpu()
+        plt.close("all")
+        oi, oj, ok = torch.where(self.full[0, 0].detach().cpu() > 0)
+        oc = self.full[0, 0, oi, oj, ok].detach().cpu()
+        oc = ok
+
+        i, j, k = torch.where(self.observable[0, 0].detach().cpu() > 0)
+        c = self.observable[0, 0, i, j, k].detach().cpu()
         c = k
-        prediction = self.prediction
-        ih, jh, kh = torch.where(prediction[0, 0].detach().cpu() >= 0)
-        ch = prediction[0, 0, ih, jh, kh].detach().cpu()
+
+        ih, jh, kh = torch.where(self.prediction[0, 0].detach().cpu() >= 0)
+        ch = self.prediction[0, 0, ih, jh, kh].detach().cpu()
         ch = kh
-        # ch = self.prediction.data[0, ih, jh, kh]
-        fig = plt.figure(figsize=(20, 10))
+
+        x_size = self.prediction.size(-3)
+        y_size = self.prediction.size(-2)
+
+        fig = plt.figure(figsize=(30, 10))
         fig.suptitle(f"iou: {self.iou[0, 1].item():.2%}")
-        ax = fig.add_subplot(1, 2, 1, projection="3d")
-        ax.scatter(i, j, k, c=c, s=1, marker="s", alpha=1)
-        ax.set_title("Ground Truth")
-        # ax.set_box_aspect((1, 1, 1 / 4))
-        ax.set_xlim(0, 512)
-        ax.set_ylim(0, 512)
+
+        ax = fig.add_subplot(1, 3, 1, projection="3d")
+        ax.scatter(oi, oj, ok, c=oc, s=1, marker="s", alpha=1)
+        ax.set_title("Full Occupancy")
+
+        ax.set_xlim(0, x_size)
+        ax.set_ylim(0, y_size)
         ax.set_zticks([])
         ax.set_box_aspect((1, 1, 1 / 10))
-        ax.view_init(azim=-60, elev=45)
+        ax.view_init(azim=-60, elev=30)
 
-        ax = fig.add_subplot(1, 2, 2, projection="3d")
+        ax = fig.add_subplot(1, 3, 2, projection="3d")
+        ax.scatter(i, j, k, c=c, s=1, marker="s", alpha=1)
+        ax.set_title("Observable Occupancy")
+
+        ax.set_xlim(0, x_size)
+        ax.set_ylim(0, y_size)
+        ax.set_zticks([])
+        ax.set_box_aspect((1, 1, 1 / 10))
+        ax.view_init(azim=-60, elev=30)
+
+        ax = fig.add_subplot(1, 3, 3, projection="3d")
         ax.scatter(ih, jh, kh, c=ch, s=1, marker="s", alpha=1)
         ax.set_title("Prediction")
-        # ax.set_box_aspect((1, 1, 1 / 4))
-        ax.set_xlim(0, 512)
-        ax.set_ylim(0, 512)
+
+        ax.set_xlim(0, x_size)
+        ax.set_ylim(0, y_size)
         ax.set_zticks([])
         ax.set_box_aspect((1, 1, 1 / 10))
-        ax.view_init(azim=-60, elev=45)
+        ax.view_init(azim=-60, elev=30)
 
         return fig
+
+
+class MultiViewImageToVoxelModel(nn.Module):
+    def __init__(
+        self,
+        in_channels: int = 4,
+        out_channels: int = 16,
+        radius_channels: int = 8,
+        hidden_size: int = 1024,
+        head_size: int = 128,
+        encoder_base_channels: int = 256,
+        refiner_base_channels: int = 256,
+        num_encoder_layers: int = 2,
+        num_encoder_attention_layers: int = 4,
+        num_refiner_layers: int = 2,
+        num_refiner_attention_layers: int = 4,
+        multiplier: int = 2,
+    ):
+        super().__init__()
+        self.in_channels = in_channels
+        self.hidden_size = 1024
+        self.radius_channels = radius_channels
+        self.encoder = UnetEncoder2d(4, self.hidden_size, 256, 2, 2)
+        self.encoder2 = UnetEncoder3d(16, self.hidden_size, 256, 2, 2)
+        self.time_embeds = nn.Linear(1, self.hidden_size)
+        self.grid_embeds = nn.Conv3d(3, self.hidden_size, 3, padding=1)
+        self.transformer = Transformer(self.hidden_size, 24, self.hidden_size // 128, 128)
+        self.decoder = UnetConditionalAttentionDecoderWithoutShortcut3d(
+            out_channels, self.hidden_size, self.hidden_size, 256, 2, 2, 128
+        )
+
+    def forward(self, occupancy: Tensor, multiview: Tensor, timestep: Tensor) -> Tensor:
+        occupancy = self.encoder2(occupancy)
+        shape = occupancy.shape
+        t_embeds = self.time_embeds(timestep.view(-1, 1, 1) / 1000)
+        occupancy = occupancy.flatten(2).transpose(-1, -2) + t_embeds
+        multiview = torch.cat(multiview.unbind(1), dim=-1)
+        multiview_latent = self.encoder(multiview)
+        desired_shape = shape[-3:]
+        i, j, k = torch.meshgrid(
+            torch.linspace(-1, 1, desired_shape[0], device=multiview.device, dtype=multiview.dtype),
+            torch.linspace(-1, 1, desired_shape[1], device=multiview.device, dtype=multiview.dtype),
+            torch.linspace(-1, 1, desired_shape[2], device=multiview.device, dtype=multiview.dtype),
+            indexing="ij",
+        )
+        ijk = torch.stack([i, j, k], dim=0).unsqueeze(0)
+        grid_embeds = self.grid_embeds(ijk).expand(multiview_latent.shape[0], -1, -1, -1, -1)
+        occupancy = occupancy + grid_embeds.flatten(2).transpose(-1, -2)
+        latent = torch.cat([occupancy, multiview_latent.flatten(2).transpose(-1, -2)], dim=1)
+        latent = self.transformer(latent)
+        occ_latent = latent[:, : occupancy.shape[1]].transpose(-1, -2).view(*shape)
+        multiview_latent = latent[:, occupancy.shape[1] :].transpose(-1, -2).reshape_as(multiview_latent)
+
+        output = self.decoder(occ_latent, multiview_latent)
+        return output
 
 
 class Diffusion3d(nn.Module):
@@ -183,22 +272,9 @@ class Diffusion3d(nn.Module):
             2,
             3,
         )
-        self.image_encoder = VisionTransformerFeatureExtractor(
-            self.image_autoencoderkl.config.latent_channels, 128, 512, 2, 6, 128
-        )
-        self.decoder = UnetConditionalAttention3d(
-            self.voxel_encoder_latent_dim,
-            self.voxel_encoder_latent_dim,
-            512,
-            512,
-            128,
-            2,
-            2,
-            4,
-            head_size=128,
-        )
+        self.decoder = MultiViewImageToVoxelModel()
 
-        self.scheduler = DDIMScheduler()
+        self.scheduler = DDIMScheduler(beta_schedule="scaled_linear", clip_sample=True)
         self._vae_slicing = False
 
     def enable_vae_slicing(self, enabled: bool = True):
@@ -266,13 +342,10 @@ class Diffusion3d(nn.Module):
         batch_size = input.images.shape[0]
         num_views = input.images.shape[1]
         multiview_sample = self.prepare_image(input.images.flatten(0, 1))
-        multiview_sample = self.image_encoder(multiview_sample)
         multiview_sample = multiview_sample.view(batch_size, num_views, *multiview_sample.shape[1:])
-        multiview_sample = torch.cat(multiview_sample.unbind(1), dim=-1)
 
         with torch.no_grad():
-            voxel_latent = self.prepare_latent_dist(input.voxel).sample()
-
+            voxel_latent = self.voxel_autoencoderkl.encode(input.occupancy).sample()
         timestep_ind = random.randint(0, len(self.scheduler.timesteps) - 1)
         timestep = self.scheduler.timesteps[timestep_ind]
         noises = torch.randn_like(voxel_latent)
@@ -282,7 +355,6 @@ class Diffusion3d(nn.Module):
             model_input, multiview_sample, timestep.view(1, 1).expand(batch_size, -1).type_as(model_input)
         )
         loss = F.mse_loss(model_output, noises)
-        voxel = input.voxel
         # 2. compute alphas, betas
         alpha_prod_t = self.scheduler.alphas_cumprod[timestep].type_as(model_input)
         beta_prod_t = 1 - alpha_prod_t
@@ -295,19 +367,20 @@ class Diffusion3d(nn.Module):
 
         return Diffusion3dOutput(
             pred_voxel,
-            voxel,
+            input.voxel,
+            input.occupancy,
+            input.images,
             loss,
+            torch.tensor(1.0, device=loss.device, dtype=loss.dtype),
         )
 
     def state_dict(self, *, prefix: str = "", keep_vars: bool = False) -> dict:
         state_dict = {
-            "image_encoder": self.image_encoder.state_dict(None, prefix, keep_vars),
             "decoder": self.decoder.state_dict(None, prefix, keep_vars),
         }
         return state_dict
 
     def load_state_dict(self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False):
-        self.image_encoder.load_state_dict(state_dict["image_encoder"], strict, assign)
         self.decoder.load_state_dict(state_dict["decoder"], strict, assign)
 
 
@@ -322,12 +395,6 @@ def load_model(model, path, partial=True):
     else:
         model.load_state_dict(state_dict, strict=False, assign=True)
     return model
-
-
-def check_bias(model: nn.Module):
-    for mod in model.modules():
-        if hasattr(mod, "bias") and mod.bias is not None:
-            raise RuntimeError(f"bias found: {mod}")
 
 
 def config_model(args):
@@ -357,9 +424,7 @@ def config_model(args):
         ),
         assign=True,
     )
-    check_bias(model.voxel_autoencoderkl)
-    check_bias(model.image_encoder)
-    check_bias(model.decoder)
+
     model.to(dtype=args.dtype, device=args.device, non_blocking=True)
     model.voxel_autoencoderkl.encoder = torch.jit.script(model.voxel_autoencoderkl.encoder)
     model.voxel_autoencoderkl.decoder = torch.jit.script(model.voxel_autoencoderkl.decoder)

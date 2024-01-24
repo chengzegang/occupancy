@@ -33,7 +33,7 @@ class GaussianDistribution:
     latent: Tensor
     mean: Tensor
     logvar: Tensor
-    latent_scale: float = 1.0
+    latent_scale: float
 
     @classmethod
     def from_latent(
@@ -228,7 +228,7 @@ class AutoEncoderKL3d(nn.Module):
         exportable: bool = False,
     ):
         super().__init__()
-        self.latent_scale = 0.125
+        self.latent_scale = 1 / 10
         self.voxel_augmentation = VoxelAugmentation()
         self.encoder = UnetEncoder3d(
             in_channels=in_channels,
