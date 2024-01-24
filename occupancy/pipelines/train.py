@@ -19,6 +19,7 @@ from tqdm import tqdm
 import threading
 
 from trimesh.voxel.ops import matrix_to_marching_cubes
+
 from . import autoencoderkl_3d, panoramic2voxel, diffusion3d
 
 torch.backends.cudnn.enabled = True
@@ -171,15 +172,20 @@ def record(run, output, model: nn.Module, args: argparse.Namespace, step: int):
     ground_truth = output.ground_truth[0, 0] > 0
     ground_truth = ground_truth.cpu().permute(1, 2, 0)
     if prediction.sum() > 0:
-        save_as_obj(prediction, f"{args.model_name}_prediction.obj")
-        save_as_obj(ground_truth, f"{args.model_name}_ground_truth.obj")
-        run.log({"prediction": wandb.Object3D(f"{args.model_name}_prediction.obj")}, step=step)
-        run.log({"ground_truth": wandb.Object3D(f"{args.model_name}_ground_truth.obj")}, step=step)
+        save_as_obj(prediction, f"{args.model_name}_prediction.glb")
+        save_as_obj(ground_truth, f"{args.model_name}_ground_truth.glb")
+        run.log({"prediction": wandb.Object3D(f"{args.model_name}_prediction.glb")}, step=step)
+        run.log({"ground_truth": wandb.Object3D(f"{args.model_name}_ground_truth.glb")}, step=step)
 
 
 def save_as_obj(voxel: Tensor, path: str):
     voxel = voxel.numpy()
     mesh = matrix_to_marching_cubes(voxel)
+    color = np.zeros((mesh.vertices.shape[0], 3), dtype=np.uint8)
+    color[:] = np.asarray((189, 195, 199), dtype=np.uint8)
+    mesh.visual.vertex_colors = color
+    mesh.update_faces(mesh.nondegenerate_faces())
+    mesh.fix_normals()
     mesh.export(path)
 
 
