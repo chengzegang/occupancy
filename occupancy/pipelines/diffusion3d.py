@@ -345,6 +345,38 @@ class Diffusion3d(nn.Module):
 
         return sample
 
+    @torch.inference_mode()
+    def generate(self, images: Tensor, num_inference_steps: int = 20) -> Tensor:
+        batch_size = images.shape[0]
+        num_views = images.shape[1]
+        multiview_sample = self.prepare_image(images.flatten(0, 1))
+        multiview_sample = multiview_sample.view(batch_size, num_views, *multiview_sample.shape[1:])
+
+        self.scheduler.set_timesteps(num_inference_steps)
+        model_input = torch.randn((batch_size, 16, 32, 32, 4), dtype=images.dtype, device=images.device)
+        noises = torch.randn_like(model_input)
+        for i in tqdm(range(num_inference_steps), dynamic_ncols=True):
+            timestep = self.scheduler.timesteps[i]
+
+            if i == 0:
+                noised = self.scheduler.add_noise(model_input, noises, timestep)
+                model_input = self.scheduler.scale_model_input(noised, timestep)
+            model_output = self.decoder(
+                model_input, multiview_sample, timestep.view(1, 1).expand(batch_size, -1).type_as(model_input)
+            )
+            prev_sample = self.scheduler.step(model_output, timestep, model_input).prev_sample
+            model_input = prev_sample
+
+        output = self.voxel_autoencoderkl.decode(prev_sample)
+        return Diffusion3dOutput(
+            output,
+            torch.zeros_like(output),
+            torch.zeros_like(output),
+            images,
+            torch.tensor(0, device=images.device, dtype=images.dtype),
+            torch.tensor(1.0, device=images.device, dtype=images.dtype),
+        )
+
     def forward(self, input: Diffusion3dInput) -> Diffusion3dOutput:
         batch_size = input.images.shape[0]
         num_views = input.images.shape[1]
