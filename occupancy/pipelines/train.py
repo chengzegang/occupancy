@@ -29,9 +29,6 @@ torch.backends.cuda.allow_bf16_reduced_precision_reduction = True
 torch.backends.cuda.allow_fp16_reduced_precision_reduction = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.CUDNN_TENSOR_DTYPES.add(torch.bfloat16)
-torch.manual_seed(0)
-torch.random.manual_seed(0)
-np.random.seed(0)
 
 
 def trace_and_compile(mod: nn.Module, inputs: torch.Tensor) -> nn.Module:

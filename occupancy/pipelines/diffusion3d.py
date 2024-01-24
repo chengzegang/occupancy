@@ -216,19 +216,19 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.hidden_size = 1024
         self.radius_channels = radius_channels
         self.encoder = UnetEncoder2d(4, self.hidden_size, 256, 2, 2)
-        self.encoder2 = UnetEncoder3d(16, self.hidden_size, 256, 2, 2)
-        self.time_embeds = nn.Linear(1, self.hidden_size)
-        self.grid_embeds = nn.Conv3d(3, self.hidden_size, 3, padding=1)
+        self.encoder2 = UnetEncoder3d(16, 512, 256, 2, 1)
+        self.time_embeds = nn.Linear(1, 256)
+        self.grid_embeds = nn.Conv3d(3, 256, 3, padding=1)
         self.transformer = Transformer(self.hidden_size, 24, self.hidden_size // 128, 128)
         self.decoder = UnetConditionalAttentionDecoderWithoutShortcut3d(
-            out_channels, self.hidden_size, self.hidden_size, 256, 2, 2, 128
+            out_channels, self.hidden_size, self.hidden_size, 256, 2, 1, 128
         )
 
     def forward(self, occupancy: Tensor, multiview: Tensor, timestep: Tensor) -> Tensor:
         occupancy = self.encoder2(occupancy)
-        shape = occupancy.shape
+        shape = occupancy.shape[-3:]
         t_embeds = self.time_embeds(timestep.view(-1, 1, 1) / 1000)
-        occupancy = occupancy.flatten(2).transpose(-1, -2) + t_embeds
+
         multiview = torch.cat(multiview.unbind(1), dim=-1)
         multiview_latent = self.encoder(multiview)
         desired_shape = shape[-3:]
@@ -240,10 +240,12 @@ class MultiViewImageToVoxelModel(nn.Module):
         )
         ijk = torch.stack([i, j, k], dim=0).unsqueeze(0)
         grid_embeds = self.grid_embeds(ijk).expand(multiview_latent.shape[0], -1, -1, -1, -1)
-        occupancy = occupancy + grid_embeds.flatten(2).transpose(-1, -2)
+        grid_embeds = grid_embeds.flatten(2).transpose(-1, -2)
+        occupancy = occupancy.flatten(2).transpose(-1, -2)
+        occupancy = torch.cat([occupancy, grid_embeds, t_embeds.expand(-1, occupancy.shape[1], -1)], dim=-1)
         latent = torch.cat([occupancy, multiview_latent.flatten(2).transpose(-1, -2)], dim=1)
         latent = self.transformer(latent)
-        occ_latent = latent[:, : occupancy.shape[1]].transpose(-1, -2).view(*shape)
+        occ_latent = latent[:, : occupancy.shape[1]].transpose(-1, -2).view(latent.shape[0], latent.shape[-1], *shape)
         multiview_latent = latent[:, occupancy.shape[1] :].transpose(-1, -2).reshape_as(multiview_latent)
 
         output = self.decoder(occ_latent, multiview_latent)
