@@ -55,13 +55,19 @@ class UnetEncoderLayer2d(nn.Module):
             kernel_size=3,
             padding=1,
         )
-        self.norm2 = SpatialRMSNorm(out_channels)
         self.conv2 = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+        )
+        self.conv3 = nn.Conv2d(
             out_channels,
             out_channels,
             kernel_size=3,
             padding=1,
         )
+
         self.shorcut = nn.Conv2d(
             in_channels,
             out_channels,
@@ -78,11 +84,8 @@ class UnetEncoderLayer2d(nn.Module):
     def forward(self, input_embeds: Tensor) -> Tensor:
         residual = self.shorcut(input_embeds)
         input_embeds = self.norm1(input_embeds)
-        input_embeds = self.nonlinear(input_embeds)
-        input_embeds = self.conv1(input_embeds)
-        input_embeds = self.norm2(input_embeds)
-        input_embeds = self.nonlinear(input_embeds)
-        input_embeds = self.conv2(input_embeds)
+        input_embeds = self.nonlinear(self.conv1(input_embeds)) * self.conv2(input_embeds)
+        input_embeds = self.conv3(input_embeds)
         input_embeds = input_embeds + residual
         input_embeds = self.downsample(input_embeds)
         return input_embeds
