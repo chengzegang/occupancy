@@ -346,28 +346,27 @@ class Diffusion3d(nn.Module):
         return sample
 
     @torch.inference_mode()
-    def generate(self, images: Tensor, num_inference_steps: int = 20) -> Tensor:
+    def generate(self, images: Tensor, num_inference_steps: int = 20, guidance_scale: float = 1.0) -> Tensor:
         batch_size = images.shape[0]
         num_views = images.shape[1]
         multiview_sample = self.prepare_image(images.flatten(0, 1))
         multiview_sample = multiview_sample.view(batch_size, num_views, *multiview_sample.shape[1:])
-
+        multiview_sample = torch.cat([torch.zeros_like(multiview_sample), multiview_sample])
         self.scheduler.set_timesteps(num_inference_steps)
-        model_input = torch.randn((batch_size, 16, 32, 32, 4), dtype=images.dtype, device=images.device)
-        noises = torch.randn_like(model_input)
+        latent = torch.randn((batch_size, 16, 32, 32, 4), dtype=images.dtype, device=images.device).clamp(-1, 1)
+        latent = torch.cat([latent, latent])
+        latent = self.scheduler.add_noise(latent, torch.randn_like(latent), self.scheduler.timesteps[0])
+        prev_sample = None
         for i in tqdm(range(num_inference_steps), dynamic_ncols=True):
             timestep = self.scheduler.timesteps[i]
-
-            if i == 0:
-                noised = self.scheduler.add_noise(model_input, noises, timestep)
-                model_input = self.scheduler.scale_model_input(noised, timestep)
-            model_output = self.decoder(
+            model_input = self.scheduler.scale_model_input(latent, timestep)
+            noise_pred = self.decoder(
                 model_input, multiview_sample, timestep.view(1, 1).expand(batch_size, -1).type_as(model_input)
             )
-            prev_sample = self.scheduler.step(model_output, timestep, model_input).prev_sample
-            model_input = prev_sample
-
-        output = self.voxel_autoencoderkl.decode(prev_sample)
+            noise_pred_uncond, noise_pred_cond = prev_sample.chunk(2, dim=0)
+            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+            latent = self.scheduler.step(noise_pred, timestep, latent).prev_sample
+        output = self.voxel_autoencoderkl.decode(latent)
         return Diffusion3dOutput(
             output,
             torch.zeros_like(output),
