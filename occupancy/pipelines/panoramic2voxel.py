@@ -345,18 +345,18 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.in_channels = in_channels
         self.hidden_size = 1536
         self.radius_channels = radius_channels
-        self.encoder = UnetEncoder2d(4, self.hidden_size, 256, 2, 2, out_norm=False)
+        self.encoder = UnetEncoder2d(4, self.hidden_size, 512, 2, 2, out_norm=False)
         self.grid_embeds = nn.Conv3d(3, self.hidden_size, 3, padding=1)
-        self.transformer = Transformer(self.hidden_size, 16, self.hidden_size // 128, 128)
+        self.transformer = Transformer(self.hidden_size, 36, self.hidden_size // 128, 128)
         self.decoder = UnetConditionalAttentionDecoderWithoutShortcut3d(
-            out_channels, self.hidden_size, self.hidden_size, 256, 2, 2, 128
+            out_channels, self.hidden_size, self.hidden_size, 512, 2, 1, 128
         )
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
         multiview = torch.cat(multiview.unbind(1), dim=-1)
 
         multiview_latent = self.encoder(multiview)
-        desired_shape = (out_shape[0] // 4, out_shape[1] // 4, out_shape[2] // 4)
+        desired_shape = (out_shape[0] // 2, out_shape[1] // 2, out_shape[2] // 2)
         desired_numel = desired_shape[0] * desired_shape[1] * desired_shape[2]
         i, j, k = torch.meshgrid(
             torch.linspace(-1, 1, desired_shape[0], device=multiview.device, dtype=multiview.dtype),
