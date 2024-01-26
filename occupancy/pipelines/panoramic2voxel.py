@@ -553,7 +553,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
 def config_model(args):
     image_autoencoderkl_model_id = os.path.join(args.save_dir, "image_autoencoderkl")
     model = None
-    model_config = MV2V_100M
+    model_config = MV2V_1B
     if os.path.exists(image_autoencoderkl_model_id):
         model = MultiViewImageToVoxelPipeline(
             num_classes=args.num_classes,
