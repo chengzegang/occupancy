@@ -153,13 +153,11 @@ class UnetConditionalAttentionEncoder3d(nn.Module):
             _out_channels[-1], condition_size, _out_channels[-1] // head_size, head_size
         )
 
-        self.out_norm = SpatialRMSNorm(_out_channels[-1])
         self.out_conv = nn.Conv3d(
             _out_channels[-1],
             latent_dim,
             kernel_size=1,
         )
-        self.nonlinear = nn.SiLU(True)
 
     def forward(self, input_embeds: Tensor, cond_embeds: Tensor) -> Tuple[Tensor, List[Tensor]]:
         input_embeds = self.in_conv(input_embeds)
@@ -167,8 +165,6 @@ class UnetConditionalAttentionEncoder3d(nn.Module):
         for layer in self.layers:
             hidden_states.append(layer(hidden_states[-1], cond_embeds))
         latent = self.out_attention(hidden_states[-1], cond_embeds)
-        latent = self.out_norm(latent)
-        latent = self.nonlinear(latent)
         latent = self.out_conv(latent)
         return latent, hidden_states
 
@@ -260,21 +256,17 @@ class UnetConditionalAttentionDecoderWithoutShortcut3d(nn.Module):
                     _in_channels[i], _out_channels[i], condition_size, _in_channels[i] // head_size, head_size
                 )
             )
-        # self.out_norm = SpatialRMSNorm(_out_channels[-1])
         self.out_conv = nn.Conv3d(
             _out_channels[-1],
             out_channels,
             kernel_size=1,
         )
-        # self.nonlinear = nn.SiLU(True)
 
     def forward(self, latents: Tensor, condition_embeds: Tensor) -> Tensor:
         hidden_states = self.in_conv(latents)
         hidden_states = self.in_attention(hidden_states, condition_embeds)
         for index, layer in enumerate(self.layers):
             hidden_states = layer(hidden_states, condition_embeds)
-        # logits = self.out_norm(hidden_states)
-        # logits = self.nonlinear(logits)
         logits = self.out_conv(hidden_states)
         return logits
 
@@ -315,13 +307,11 @@ class UnetConditionalAttentionDecoder3d(nn.Module):
                     _in_channels[i], _out_channels[i], condition_size, _in_channels[i] // head_size, head_size
                 )
             )
-        self.out_norm = SpatialRMSNorm(_out_channels[-1])
         self.out_conv = nn.Conv3d(
             _out_channels[-1],
             out_channels,
             kernel_size=1,
         )
-        self.nonlinear = nn.SiLU(True)
 
     def forward(self, latents: Tensor, prev_embeds: List[Tensor], condition_embeds: Tensor) -> Tensor:
         hidden_states = self.in_conv(latents)
@@ -329,9 +319,7 @@ class UnetConditionalAttentionDecoder3d(nn.Module):
         for index, layer in enumerate(self.layers):
             prev = prev_embeds[index]
             hidden_states = layer(hidden_states, prev, condition_embeds)
-        logits = self.out_norm(hidden_states)
-        logits = self.nonlinear(logits)
-        logits = self.out_conv(logits)
+        logits = self.out_conv(hidden_states)
         return logits
 
 
