@@ -325,16 +325,33 @@ class ConditionalUnetDecoder3d(nn.Module):
         return x
 
 
+MV2V_100M = {
+    "hidden_size": 768,
+    "num_layers": 12,
+    "base_channels": 256,
+}
+MV2V_500M = {
+    "hidden_size": 1024,
+    "num_layers": 24,
+    "base_channels": 512,
+}
+MV2V_1B = {
+    "hidden_size": 1536,
+    "num_layers": 32,
+    "base_channels": 512,
+}
+
+
 class MultiViewImageToVoxelModel(nn.Module):
     def __init__(
         self,
         in_channels: int = 4,
         out_channels: int = 16,
         radius_channels: int = 8,
-        hidden_size: int = 1536,
+        hidden_size: int = 768,
         head_size: int = 128,
-        num_layers: int = 32,
-        base_channels: int = 512,
+        num_layers: int = 12,
+        base_channels: int = 256,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -388,6 +405,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         self,
         num_classes: int = 1,
         image_autoencoderkl_model_id: str = "stabilityai/sdxl-vae",
+        model_config: dict = MV2V_100M,
         **kwargs,
     ):
         super().__init__()
@@ -408,9 +426,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         )
 
         self.decoder = MultiViewImageToVoxelModel(
-            4,
-            self.voxel_encoder_latent_dim,
-            self.plane2polar_depth_channels,
+            4, self.voxel_encoder_latent_dim, self.plane2polar_depth_channels, **model_config
         )
         self.voxel_autoencoderkl.requires_grad_(False)
         self.image_autoencoderkl.requires_grad_(False)
@@ -537,13 +553,19 @@ class MultiViewImageToVoxelPipeline(nn.Module):
 def config_model(args):
     image_autoencoderkl_model_id = os.path.join(args.save_dir, "image_autoencoderkl")
     model = None
+    model_config = MV2V_100M
     if os.path.exists(image_autoencoderkl_model_id):
         model = MultiViewImageToVoxelPipeline(
-            num_classes=args.num_classes, image_autoencoderkl_model_id=image_autoencoderkl_model_id
+            num_classes=args.num_classes,
+            image_autoencoderkl_model_id=image_autoencoderkl_model_id,
+            model_config=model_config,
         )
 
     else:
-        model = MultiViewImageToVoxelPipeline(num_classes=args.num_classes)
+        model = MultiViewImageToVoxelPipeline(
+            num_classes=args.num_classes,
+            model_config=model_config,
+        )
         model.image_autoencoderkl.save_pretrained(image_autoencoderkl_model_id)
     try:
         path = os.path.join(args.save_dir, f"panoramic2voxel-cls{args.num_classes}.pt")
