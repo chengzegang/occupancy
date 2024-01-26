@@ -17,8 +17,13 @@ class UnetConvolution3d(nn.Module):
             kernel_size=3,
             padding=1,
         )
-        self.norm2 = SpatialRMSNorm(out_channels)
         self.conv2 = nn.Conv3d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+        )
+        self.conv3 = nn.Conv3d(
             out_channels,
             out_channels,
             kernel_size=3,
@@ -33,14 +38,11 @@ class UnetConvolution3d(nn.Module):
 
     def forward(self, input_embeds: Tensor) -> Tensor:
         residual = self.shorcut(input_embeds)
-        input_embeds = self.norm1(input_embeds)
-        input_embeds = self.nonlinear(input_embeds)
-        input_embeds = self.conv1(input_embeds)
-        input_embeds = self.norm2(input_embeds)
-        input_embeds = self.nonlinear(input_embeds)
-        input_embeds = self.conv2(input_embeds)
-        input_embeds = input_embeds + residual
-        return input_embeds
+        hidden_states = self.norm1(input_embeds)
+        hidden_states = self.nonlinear(self.conv1(hidden_states)) * self.conv2(hidden_states)
+        hidden_states = self.conv3(hidden_states)
+        hidden_states = hidden_states + residual
+        return hidden_states
 
 
 class Attention3d(nn.Module):

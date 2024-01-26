@@ -235,23 +235,14 @@ class MultiViewImageToVoxelModel(nn.Module):
         multiview_latent = multiview_latent.view(multiview_latent.shape[0], -1, 8, *multiview_latent.shape[-2:])
         multiview_latent = ops.view_as_cartesian(multiview_latent, shape[-3:])
 
-        # desired_shape = shape[-3:]
-        # i, j, k = torch.meshgrid(
-        #    torch.linspace(-1, 1, desired_shape[0], device=multiview.device, dtype=multiview.dtype),
-        #    torch.linspace(-1, 1, desired_shape[1], device=multiview.device, dtype=multiview.dtype),
-        #    torch.linspace(-1, 1, desired_shape[2], device=multiview.device, dtype=multiview.dtype),
-        #    indexing="ij",
-        # )
-        # ijk = torch.stack([i, j, k], dim=0).unsqueeze(0)
-        # grid_embeds = self.grid_embeds(ijk).expand(multiview_latent.shape[0], -1, -1, -1, -1)
-        # grid_embeds = grid_embeds.flatten(2).transpose(-1, -2)
         occupancy = occupancy.flatten(2).transpose(-1, -2)
         multiview_latent = multiview_latent.flatten(2).transpose(-1, -2)
-        latent = torch.cat([occupancy, multiview_latent, t_embeds.expand(-1, occupancy.shape[1], -1)], dim=-1)
-        # latent = torch.cat([occupancy, multiview_latent.flatten(2).transpose(-1, -2)], dim=1)
+        latent = torch.cat(
+            [occupancy, multiview_latent, t_embeds.expand(occupancy.shape[0], occupancy.shape[1], -1)], dim=-1
+        )
+
         latent = self.transformer(latent)
         occ_latent = latent.transpose(-1, -2).view(latent.shape[0], latent.shape[-1], *shape)
-        # multiview_latent = latent[:, occupancy.shape[1] :].transpose(-1, -2).reshape_as(multiview_latent)
 
         output = self.decoder(occ_latent, cond_latent)
         return output
@@ -346,7 +337,13 @@ class Diffusion3d(nn.Module):
         return sample
 
     @torch.inference_mode()
-    def generate(self, images: Tensor, num_inference_steps: int = 20, guidance_scale: float = 1.0) -> Tensor:
+    def generate(
+        self,
+        images: Tensor,
+        target: Optional[Tensor] = None,
+        num_inference_steps: int = 20,
+        guidance_scale: float = 1.0,
+    ) -> Tensor:
         batch_size = images.shape[0]
         num_views = images.shape[1]
         multiview_sample = self.prepare_image(images.flatten(0, 1))
@@ -355,22 +352,22 @@ class Diffusion3d(nn.Module):
         self.scheduler.set_timesteps(num_inference_steps)
         latent = torch.randn((batch_size, 16, 32, 32, 4), dtype=images.dtype, device=images.device).clamp(-1, 1)
         latent = torch.cat([latent, latent])
-        latent = self.scheduler.add_noise(latent, torch.randn_like(latent), self.scheduler.timesteps[0])
-        prev_sample = None
         for i in tqdm(range(num_inference_steps), dynamic_ncols=True):
             timestep = self.scheduler.timesteps[i]
             model_input = self.scheduler.scale_model_input(latent, timestep)
             noise_pred = self.decoder(
                 model_input, multiview_sample, timestep.view(1, 1).expand(batch_size, -1).type_as(model_input)
             )
-            noise_pred_uncond, noise_pred_cond = prev_sample.chunk(2, dim=0)
+            noise_pred_uncond, noise_pred_cond = noise_pred.chunk(2)
             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
             latent = self.scheduler.step(noise_pred, timestep, latent).prev_sample
-        output = self.voxel_autoencoderkl.decode(latent)
+
+        uncond_sample, cond_sample = latent.chunk(2)
+        output = self.voxel_autoencoderkl.decode(cond_sample)
         return Diffusion3dOutput(
             output,
-            torch.zeros_like(output),
-            torch.zeros_like(output),
+            torch.zeros_like(output) if target is None else target,
+            torch.zeros_like(output) if target is None else target,
             images,
             torch.tensor(0, device=images.device, dtype=images.dtype),
             torch.tensor(1.0, device=images.device, dtype=images.dtype),

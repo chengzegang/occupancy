@@ -36,20 +36,13 @@ class UnetConvolution3d(nn.Module):
         )
         self.nonlinear = nn.SiLU(True)
 
-        nn.init.kaiming_normal_(self.conv1.weight, mode="fan_out", nonlinearity="relu")
-        nn.init.zeros_(self.conv1.bias)
-        nn.init.kaiming_normal_(self.conv2.weight, mode="fan_out", nonlinearity="relu")
-        nn.init.zeros_(self.conv2.bias)
-        nn.init.kaiming_normal_(self.shorcut.weight, mode="fan_out", nonlinearity="relu")
-        nn.init.zeros_(self.shorcut.bias)
-
     def forward(self, input_embeds: Tensor) -> Tensor:
         residual = self.shorcut(input_embeds)
-        input_embeds = self.norm1(input_embeds)
-        input_embeds = self.nonlinear(self.conv1(input_embeds)) * self.conv2(input_embeds)
-        input_embeds = self.conv3(input_embeds)
-        input_embeds = input_embeds + residual
-        return input_embeds
+        hidden_states = self.norm1(input_embeds)
+        hidden_states = self.nonlinear(self.conv1(hidden_states)) * self.conv2(hidden_states)
+        hidden_states = self.conv3(hidden_states)
+        hidden_states = hidden_states + residual
+        return hidden_states
 
 
 class ConditionalAttention3d(nn.Module):
@@ -63,11 +56,10 @@ class ConditionalAttention3d(nn.Module):
         self.self_attn = Attention(hidden_size, num_heads, head_size)
 
         self.ln2 = RMSNorm(hidden_size)
-        self.c_proj = nn.Linear(
+        self.cond_proj = nn.Linear(
             condition_size,
             hidden_size,
         )
-        self.c_norm = RMSNorm(hidden_size)
         self.cross_attn = CrossAttention(hidden_size, num_heads, head_size)
 
         self.ln3 = RMSNorm(hidden_size)
@@ -89,8 +81,7 @@ class ConditionalAttention3d(nn.Module):
 
         residual = input_embeds
         input_embeds = self.ln2(input_embeds)
-        cond_embeds = self.c_proj(condition_embeds)
-        cond_embeds = self.c_norm(cond_embeds)
+        cond_embeds = self.cond_proj(condition_embeds)
         input_embeds = self.cross_attn(input_embeds, cond_embeds)
         input_embeds = input_embeds + residual
 
@@ -170,12 +161,6 @@ class UnetConditionalAttentionEncoder3d(nn.Module):
         )
         self.nonlinear = nn.SiLU(True)
 
-        nn.init.kaiming_normal_(self.in_conv.weight, mode="fan_in", nonlinearity="relu")
-        nn.init.kaiming_normal_(self.out_conv.weight, mode="fan_in", nonlinearity="relu")
-
-        nn.init.zeros_(self.in_conv.bias)
-        nn.init.zeros_(self.out_conv.bias)
-
     def forward(self, input_embeds: Tensor, cond_embeds: Tensor) -> Tuple[Tensor, List[Tensor]]:
         input_embeds = self.in_conv(input_embeds)
         hidden_states = [input_embeds]
@@ -204,8 +189,6 @@ class UnetConditionalAttentionDecoderLayerWithoutShortcut3d(nn.Module):
             stride=2,
         )
         self.convolution = UnetConvolution3d(out_channels, out_channels)
-
-        self.shortcut.weight.data.zero_()
 
     def forward(self, input_embeds: Tensor, condition_embeds: Tensor) -> Tensor:
         input_embeds = self.attention(input_embeds, condition_embeds)

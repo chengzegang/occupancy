@@ -45,52 +45,6 @@ class AttentionLayer2d(nn.Module):
         return hidden_states
 
 
-class UnetEncoderLayer2d(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int):
-        super().__init__()
-        self.norm1 = SpatialRMSNorm(in_channels)
-        self.conv1 = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=3,
-            padding=1,
-        )
-        self.conv2 = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=3,
-            padding=1,
-        )
-        self.conv3 = nn.Conv2d(
-            out_channels,
-            out_channels,
-            kernel_size=3,
-            padding=1,
-        )
-
-        self.shorcut = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=1,
-        )
-        self.downsample = nn.Conv2d(
-            out_channels,
-            out_channels,
-            kernel_size=2,
-            stride=2,
-        )
-        self.nonlinear = nn.SiLU(True)
-
-    def forward(self, input_embeds: Tensor) -> Tensor:
-        residual = self.shorcut(input_embeds)
-        input_embeds = self.norm1(input_embeds)
-        input_embeds = self.nonlinear(self.conv1(input_embeds)) * self.conv2(input_embeds)
-        input_embeds = self.conv3(input_embeds)
-        input_embeds = input_embeds + residual
-        input_embeds = self.downsample(input_embeds)
-        return input_embeds
-
-
 class UnetEncoder2d(nn.Module):
     def __init__(
         self,
@@ -133,7 +87,7 @@ class UnetEncoder2d(nn.Module):
         return self.layers(voxel_inputs)
 
 
-class UnetDecoderLayer2d(nn.Module):
+class UnetConvolution2d(nn.Module):
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
         self.norm1 = SpatialRMSNorm(in_channels)
@@ -143,8 +97,13 @@ class UnetDecoderLayer2d(nn.Module):
             kernel_size=3,
             padding=1,
         )
-        self.norm2 = SpatialRMSNorm(out_channels)
         self.conv2 = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+        )
+        self.conv3 = nn.Conv2d(
             out_channels,
             out_channels,
             kernel_size=3,
@@ -165,50 +124,45 @@ class UnetDecoderLayer2d(nn.Module):
 
     def forward(self, input_embeds: Tensor) -> Tensor:
         residual = self.shorcut(input_embeds)
-        input_embeds = self.norm1(input_embeds)
-        input_embeds = self.nonlinear(input_embeds)
-        input_embeds = self.conv1(input_embeds)
-        input_embeds = self.norm2(input_embeds)
-        input_embeds = self.nonlinear(input_embeds)
-        input_embeds = self.conv2(input_embeds)
-        input_embeds = input_embeds + residual
-        input_embeds = self.upsample(input_embeds)
+        hidden_states = self.norm1(input_embeds)
+        hidden_states = self.nonlinear(self.conv1(hidden_states)) * self.conv2(hidden_states)
+        hidden_states = self.conv3(hidden_states)
+        hidden_states = hidden_states + residual
+        return hidden_states
+
+
+class UnetEncoderLayer2d(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.convolution = UnetConvolution2d(in_channels, out_channels)
+        self.downsample = nn.Conv2d(
+            out_channels,
+            out_channels,
+            kernel_size=2,
+            stride=2,
+        )
+
+    def forward(self, input_embeds: Tensor) -> Tensor:
+        input_embeds = self.convolution(input_embeds)
+        input_embeds = self.downsample(input_embeds)
         return input_embeds
 
 
-class SwiGLU2d(nn.Module):
-    def __init__(self, n_channels: int):
+class UnetDecoderLayer2d(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
-        self.norm = nn.InstanceNorm2d(n_channels)
-        self.conv1 = nn.Conv2d(
-            n_channels,
-            n_channels // 4,
-            kernel_size=3,
-            padding=1,
+        self.covolution = UnetConvolution2d(in_channels, out_channels)
+        self.upsample = nn.ConvTranspose2d(
+            out_channels,
+            out_channels,
+            kernel_size=2,
+            stride=2,
         )
-        self.conv2 = nn.Conv2d(
-            n_channels,
-            n_channels // 4,
-            kernel_size=3,
-            padding=1,
-        )
-        self.conv3 = nn.Conv2d(
-            n_channels // 4,
-            n_channels,
-            kernel_size=3,
-            padding=1,
-        )
-        self.nonlinear = nn.ReLU(True)
 
-    def forward(self, input: Tensor) -> Tensor:
-        residual = input
-        hidden = self.norm(input)
-        w1 = self.conv1(hidden)
-        w2 = self.conv2(hidden)
-        hidden = self.nonlinear(w1) * w2
-        hidden = self.conv3(hidden)
-        hidden = hidden + residual
-        return hidden
+    def forward(self, input_embeds: Tensor) -> Tensor:
+        input_embeds = self.covolution(input_embeds)
+        input_embeds = self.upsample(input_embeds)
+        return input_embeds
 
 
 class UnetDecoder2d(nn.Module):

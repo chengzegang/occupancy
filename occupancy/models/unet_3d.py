@@ -117,7 +117,7 @@ class AttentionLayer3d(nn.Module):
         return hidden_states
 
 
-class UnetEncoderLayer3d(nn.Module):
+class UnetConvolution3d(nn.Module):
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
         self.norm1 = SpatialRMSNorm(in_channels)
@@ -127,8 +127,13 @@ class UnetEncoderLayer3d(nn.Module):
             kernel_size=3,
             padding=1,
         )
-        self.norm2 = SpatialRMSNorm(out_channels)
         self.conv2 = nn.Conv3d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+        )
+        self.conv3 = nn.Conv3d(
             out_channels,
             out_channels,
             kernel_size=3,
@@ -139,23 +144,30 @@ class UnetEncoderLayer3d(nn.Module):
             out_channels,
             kernel_size=1,
         )
+        self.nonlinear = nn.SiLU(True)
+
+    def forward(self, input_embeds: Tensor) -> Tensor:
+        residual = self.shorcut(input_embeds)
+        hidden_states = self.norm1(input_embeds)
+        hidden_states = self.nonlinear(self.conv1(hidden_states)) * self.conv2(hidden_states)
+        hidden_states = self.conv3(hidden_states)
+        hidden_states = hidden_states + residual
+        return hidden_states
+
+
+class UnetEncoderLayer3d(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.convolution = UnetConvolution3d(in_channels, out_channels)
         self.downsample = nn.Conv3d(
             out_channels,
             out_channels,
             kernel_size=2,
             stride=2,
         )
-        self.nonlinear = nn.SiLU(True)
 
     def forward(self, input_embeds: Tensor) -> Tensor:
-        residual = self.shorcut(input_embeds)
-        input_embeds = self.norm1(input_embeds)
-        input_embeds = self.nonlinear(input_embeds)
-        input_embeds = self.conv1(input_embeds)
-        input_embeds = self.norm2(input_embeds)
-        input_embeds = self.nonlinear(input_embeds)
-        input_embeds = self.conv2(input_embeds)
-        input_embeds = input_embeds + residual
+        input_embeds = self.convolution(input_embeds)
         input_embeds = self.downsample(input_embeds)
         return input_embeds
 
@@ -192,8 +204,6 @@ class UnetEncoder3d(nn.Module):
             if not exportable
             else ExportableAttentionLayer3d(_out_channels[-1], num_heads, 128)
         )
-        self.layers.append(SpatialRMSNorm(_out_channels[-1]))
-        self.layers.append(nn.SiLU(True))
         self.layers.append(
             nn.Conv3d(
                 _out_channels[-1],
@@ -209,42 +219,16 @@ class UnetEncoder3d(nn.Module):
 class UnetDecoderLayer3d(nn.Module):
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
-        self.norm1 = SpatialRMSNorm(in_channels)
-        self.conv1 = nn.Conv3d(
-            in_channels,
-            out_channels,
-            kernel_size=3,
-            padding=1,
-        )
-        self.norm2 = SpatialRMSNorm(out_channels)
-        self.conv2 = nn.Conv3d(
-            out_channels,
-            out_channels,
-            kernel_size=3,
-            padding=1,
-        )
-        self.shorcut = nn.Conv3d(
-            in_channels,
-            out_channels,
-            kernel_size=1,
-        )
+        self.convolution = UnetConvolution3d(in_channels, out_channels)
         self.upsample = nn.ConvTranspose3d(
             out_channels,
             out_channels,
             kernel_size=2,
             stride=2,
         )
-        self.nonlinear = nn.SiLU(True)
 
     def forward(self, input_embeds: Tensor) -> Tensor:
-        residual = self.shorcut(input_embeds)
-        input_embeds = self.norm1(input_embeds)
-        input_embeds = self.nonlinear(input_embeds)
-        input_embeds = self.conv1(input_embeds)
-        input_embeds = self.norm2(input_embeds)
-        input_embeds = self.nonlinear(input_embeds)
-        input_embeds = self.conv2(input_embeds)
-        input_embeds = input_embeds + residual
+        input_embeds = self.convolution(input_embeds)
         input_embeds = self.upsample(input_embeds)
         return input_embeds
 
@@ -285,8 +269,6 @@ class UnetDecoder3d(nn.Module):
         )
         for i in range(num_layers):
             self.layers.append(UnetDecoderLayer3d(_in_channels[i], _out_channels[i]))
-        self.layers.append(SpatialRMSNorm(base_channels))
-        self.layers.append(nn.SiLU(True))
         self.layers.append(
             nn.Conv3d(
                 base_channels,

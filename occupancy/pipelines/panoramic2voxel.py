@@ -354,6 +354,7 @@ class MultiViewImageToVoxelModel(nn.Module):
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
         multiview = torch.cat(multiview.unbind(1), dim=-1)
+
         multiview_latent = self.encoder(multiview)
         desired_shape = (out_shape[0] // 4, out_shape[1] // 4, out_shape[2] // 4)
         desired_numel = desired_shape[0] * desired_shape[1] * desired_shape[2]
