@@ -213,7 +213,7 @@ def train(
             AdamW,
             lr=args.lr,
             weight_decay=args.weight_decay,
-            betas=(0.9, 0.96),
+            betas=args.betas,
             eps=1e-8,
             parameters_as_bucket_view=True,
         )
@@ -222,7 +222,7 @@ def train(
             model.parameters(),
             lr=args.lr,
             weight_decay=args.weight_decay,
-            betas=(0.9, 0.96),
+            betas=args.betas,
             eps=1e-8,
         )
     total_steps = 2 * len(dl) // args.grad_accum
@@ -258,12 +258,14 @@ def train(
                         output, mean_loss = forward()
                 else:
                     output, mean_loss = forward()
-                    nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    nn.utils.clip_grad_norm_(model.parameters(), 1.0, foreach=True)
                     optimizer.step()
                     scheduler.step()
                     optimizer.zero_grad()
 
-                pbar.set_description(f"Loss: {mean_loss.item():.4f}, LR: {scheduler.get_last_lr()[0]:.3e}")
+                pbar.set_description(
+                    f"Loss: {mean_loss.item():.4f}, LR: {scheduler.get_last_lr()[0]:.3e}, Epoch: {ep}, Step: {step}"
+                )
                 if step % args.save_every == 0 and torch.isfinite(mean_loss) and local_rank == 0:
                     record(run, output, model, args, step)
                 step += 1
@@ -288,6 +290,7 @@ if __name__ == "__main__":
     parser.add_argument("--total-epochs", type=int, default=100)
     parser.add_argument("--num-classes", type=int, default=1)
     parser.add_argument("--warmup-steps", type=int, default=0)
+    parser.add_argument("--betas", type=float, nargs=2, default=[0.9, 0.96])
 
     args = parser.parse_args()
     match args.dtype:
