@@ -351,6 +351,20 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.decoder = UnetConditionalAttentionDecoderWithoutShortcut3d(
             out_channels, self.hidden_size, self.hidden_size, 512, 2, 1, 128
         )
+        self._last_shape = None
+        self._last_grid = None
+
+    def build_grid(
+        self, out_shape: Tuple[int, int, int], device: str | torch.device = "cpu", dtype: torch.dtype = torch.float32
+    ) -> Tensor:
+        i, j, k = torch.meshgrid(
+            torch.linspace(-1, 1, out_shape[0], device=device, dtype=dtype),
+            torch.linspace(-1, 1, out_shape[1], device=device, dtype=dtype),
+            torch.linspace(-1, 1, out_shape[2], device=device, dtype=dtype),
+            indexing="ij",
+        )
+        ijk = torch.stack([i, j, k], dim=0).unsqueeze(0)
+        return ijk
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
         multiview = torch.cat(multiview.unbind(1), dim=-1)
@@ -358,14 +372,11 @@ class MultiViewImageToVoxelModel(nn.Module):
         multiview_latent = self.encoder(multiview)
         desired_shape = (out_shape[0] // 2, out_shape[1] // 2, out_shape[2] // 2)
         desired_numel = desired_shape[0] * desired_shape[1] * desired_shape[2]
-        i, j, k = torch.meshgrid(
-            torch.linspace(-1, 1, desired_shape[0], device=multiview.device, dtype=multiview.dtype),
-            torch.linspace(-1, 1, desired_shape[1], device=multiview.device, dtype=multiview.dtype),
-            torch.linspace(-1, 1, desired_shape[2], device=multiview.device, dtype=multiview.dtype),
-            indexing="ij",
-        )
-        ijk = torch.stack([i, j, k], dim=0).unsqueeze(0)
-        grid_embeds = self.grid_embeds(ijk).expand(multiview_latent.shape[0], -1, -1, -1, -1)
+        if self._last_shape != desired_shape:
+            self._last_shape = desired_shape
+            self._last_grid = self.build_grid(desired_shape, multiview.device, multiview.dtype)
+
+        grid_embeds = self.grid_embeds(self._last_grid).expand(multiview_latent.shape[0], -1, -1, -1, -1)
         latent = torch.cat(
             [grid_embeds.flatten(2).transpose(-1, -2), multiview_latent.flatten(2).transpose(-1, -2)], dim=1
         )
