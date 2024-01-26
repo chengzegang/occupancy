@@ -235,7 +235,6 @@ def train(
     ) as run:
         run.watch(model)
         step = 0
-        batch_mean_loss = 0
         for ep in range(args.total_epochs):
             args.grad_accum = args.grad_accum * (ep + 1)
             if sampler is not None:
@@ -248,9 +247,7 @@ def train(
                     output = model(model_input)
                     mean_loss = output.loss.mean()
                     (mean_loss / args.grad_accum).backward()
-                    nonlocal batch_mean_loss
-                    batch_mean_loss += mean_loss.item()
-
+                    run.log({"loss": mean_loss.item()}, step=step)
                     return output, mean_loss
 
                 if not (step % args.grad_accum == 0 and i > 0):
@@ -265,12 +262,10 @@ def train(
                     optimizer.step()
                     scheduler.step()
                     optimizer.zero_grad()
-                    run.log({"loss": batch_mean_loss}, step=step // args.grad_accum)
-                    batch_mean_loss = 0
 
                 pbar.set_description(f"Loss: {mean_loss.item():.4f}, LR: {scheduler.get_last_lr()[0]:.3e}")
                 if step % args.save_every == 0 and torch.isfinite(mean_loss) and local_rank == 0:
-                    record(run, output, model, args, step // args.grad_accum)
+                    record(run, output, model, args, step)
                 step += 1
 
 
