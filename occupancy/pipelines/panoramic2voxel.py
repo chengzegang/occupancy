@@ -331,25 +331,20 @@ class MultiViewImageToVoxelModel(nn.Module):
         in_channels: int = 4,
         out_channels: int = 16,
         radius_channels: int = 8,
-        hidden_size: int = 1024,
+        hidden_size: int = 1536,
         head_size: int = 128,
-        encoder_base_channels: int = 256,
-        refiner_base_channels: int = 256,
-        num_encoder_layers: int = 2,
-        num_encoder_attention_layers: int = 4,
-        num_refiner_layers: int = 2,
-        num_refiner_attention_layers: int = 4,
-        multiplier: int = 2,
+        num_layers: int = 32,
+        base_channels: int = 512,
     ):
         super().__init__()
         self.in_channels = in_channels
-        self.hidden_size = 1536
+        self.hidden_size = hidden_size
         self.radius_channels = radius_channels
-        self.encoder = UnetEncoder2d(4, self.hidden_size, 512, 2, 2, out_norm=False)
+        self.encoder = UnetEncoder2d(4, self.hidden_size, base_channels, 2, 2)
         self.grid_embeds = nn.Conv3d(3, self.hidden_size, 3, padding=1)
-        self.transformer = Transformer(self.hidden_size, 32, self.hidden_size // 128, 128)
+        self.transformer = Transformer(self.hidden_size, num_layers, self.hidden_size // head_size, head_size)
         self.decoder = UnetConditionalAttentionDecoderWithoutShortcut3d(
-            out_channels, self.hidden_size, self.hidden_size, 512, 2, 1, 128
+            out_channels, self.hidden_size, self.hidden_size, base_channels, 2, 1, head_size
         )
         self._last_shape = None
         self._last_grid = None

@@ -53,7 +53,6 @@ class UnetEncoder2d(nn.Module):
         base_channels: int = 64,
         multiplier: int = 2,
         num_layers: int = 3,
-        out_norm: bool = True,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -73,8 +72,6 @@ class UnetEncoder2d(nn.Module):
         for i in range(num_layers):
             self.layers.append(UnetEncoderLayer2d(_in_channels[i], _out_channels[i]))
         self.layers.append(AttentionLayer2d(_out_channels[-1], num_heads, 128))
-        self.layers.append(SpatialRMSNorm(_out_channels[-1])) if out_norm else None
-        self.layers.append(nn.SiLU(True)) if out_norm else None
         self.layers.append(
             nn.Conv2d(
                 _out_channels[-1],
@@ -198,8 +195,6 @@ class UnetDecoder2d(nn.Module):
         )
         for i in range(num_layers):
             self.layers.append(UnetDecoderLayer2d(_in_channels[i], _out_channels[i]))
-        self.layers.append(SpatialRMSNorm(base_channels))
-        self.layers.append(nn.SiLU(True))
         self.layers.append(
             nn.Conv2d(
                 base_channels,
