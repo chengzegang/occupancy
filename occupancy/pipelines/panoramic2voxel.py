@@ -359,6 +359,7 @@ class MultiViewImageToVoxelModel(nn.Module):
             indexing="ij",
         )
         ijk = torch.stack([i, j, k], dim=0).unsqueeze(0)
+        ijk.requires_grad_(False)
         return ijk
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
@@ -371,7 +372,7 @@ class MultiViewImageToVoxelModel(nn.Module):
             self._last_shape = desired_shape
             self._last_grid = self.build_grid(desired_shape, multiview.device, multiview.dtype)
 
-        grid_embeds = self.grid_embeds(self._last_grid).expand(multiview_latent.shape[0], -1, -1, -1, -1)
+        grid_embeds = self.grid_embeds(self._last_grid.detach()).expand(multiview_latent.shape[0], -1, -1, -1, -1)
         latent = torch.cat(
             [grid_embeds.flatten(2).transpose(-1, -2), multiview_latent.flatten(2).transpose(-1, -2)], dim=1
         )
