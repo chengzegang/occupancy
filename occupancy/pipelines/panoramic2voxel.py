@@ -121,8 +121,7 @@ class MultiViewImageToVoxelPipelineInput:
 
 class MultiViewImageToVoxelPipelineOutput:
     prediction: Tensor
-    observable: Tensor
-    full: Tensor
+    ground_truth: Tensor
     images: Tensor
     loss: Optional[Tensor] = None
     pos_weight: Optional[Tensor] = None
@@ -154,14 +153,12 @@ class MultiViewImageToVoxelPipelineOutput:
         self,
         prediction: Tensor,
         ground_truth: Tensor,
-        occupancy: Tensor,
         images: Tensor,
         loss: Optional[Tensor] = None,
         pos_weight=None,
     ):
         self.prediction = prediction
         self.observable = ground_truth
-        self.full = occupancy
         self.images = images
         self.loss = loss
         self.pos_weight = pos_weight
@@ -170,59 +167,48 @@ class MultiViewImageToVoxelPipelineOutput:
     @property
     @torch.jit.unused
     def iou(self):
-        return ops.iou(self.prediction.flatten() >= 0, self.full.flatten() > 0, 2, 0)
+        return ops.iou(self.prediction.flatten() >= 0, self.ground_truth.flatten() > 0, 2, 0)
 
     @property
     @torch.jit.unused
     def figure(self) -> plt.Figure:
-        plt.close("all")
-        oi, oj, ok = torch.where(self.full[0, 0].detach().cpu() > 0)
-        oc = self.full[0, 0, oi, oj, ok].detach().cpu()
-        oc = ok
+        i, j, k = None, None, None
+        ih, jh, kh = None, None, None
+        c = None
+        ch = None
+        if self.ground_truth.size(1) == 1:
+            i, j, k = torch.where(self.ground_truth[0, 0].detach().cpu() > 0)
+            ih, jh, kh = torch.where(self.prediction[0, 0].detach().cpu() >= 0)
+            c = k
+            ch = kh
+        else:
+            i, j, k = torch.where(self.ground_truth[0].argmax(dim=0).detach().cpu() > 0)
+            c = self.ground_truth[0].argmax(dim=0)[i, j, k].detach().cpu()
+            c = self._CMAP[c] / 255.0
 
-        i, j, k = torch.where(self.observable[0, 0].detach().cpu() > 0)
-        c = self.observable[0, 0, i, j, k].detach().cpu()
-        c = k
+            ih, jh, kh = torch.where(self.prediction[0].argmax(dim=0).detach().cpu() > 0)
+            ch = self.prediction[0].argmax(dim=0)[ih, jh, kh].detach().cpu()
+            ch = self._CMAP[ch] / 255.0
 
-        ih, jh, kh = torch.where(self.prediction[0, 0].detach().cpu() >= 0)
-        ch = self.prediction[0, 0, ih, jh, kh].detach().cpu()
-        ch = kh
-
-        x_size = self.prediction.size(-3)
-        y_size = self.prediction.size(-2)
-
-        fig = plt.figure(figsize=(30, 10))
+        fig = plt.figure(figsize=(20, 10))
         fig.suptitle(f"iou: {self.iou[0, 1].item():.2%}")
-
-        ax = fig.add_subplot(1, 3, 1, projection="3d")
-        ax.scatter(oi, oj, ok, c=oc, s=1, marker="s", alpha=1)
-        ax.set_title("Full Occupancy")
-
-        ax.set_xlim(0, x_size)
-        ax.set_ylim(0, y_size)
-        ax.set_zticks([])
+        ax = fig.add_subplot(1, 2, 1, projection="3d")
+        ax.scatter(i, j, k, c=c, s=1, marker="s", alpha=0.8)
+        ax.set_title("Ground Truth")
         ax.set_box_aspect((1, 1, 1 / 10))
-        ax.view_init(azim=-60, elev=30)
-
-        ax = fig.add_subplot(1, 3, 2, projection="3d")
-        ax.scatter(i, j, k, c=c, s=1, marker="s", alpha=1)
-        ax.set_title("Observable Occupancy")
-
-        ax.set_xlim(0, x_size)
-        ax.set_ylim(0, y_size)
+        ax.set_xlim(0, 256)
+        ax.set_ylim(0, 256)
         ax.set_zticks([])
-        ax.set_box_aspect((1, 1, 1 / 10))
-        ax.view_init(azim=-60, elev=30)
+        ax.view_init(azim=-45, elev=45)
 
-        ax = fig.add_subplot(1, 3, 3, projection="3d")
-        ax.scatter(ih, jh, kh, c=ch, s=1, marker="s", alpha=1)
+        ax = fig.add_subplot(1, 2, 2, projection="3d")
+        ax.scatter(ih, jh, kh, c=ch, s=1, marker="s", alpha=0.8)
         ax.set_title("Prediction")
-
-        ax.set_xlim(0, x_size)
-        ax.set_ylim(0, y_size)
-        ax.set_zticks([])
         ax.set_box_aspect((1, 1, 1 / 10))
-        ax.view_init(azim=-60, elev=30)
+        ax.set_xlim(0, 256)
+        ax.set_ylim(0, 256)
+        ax.set_zticks([])
+        ax.view_init(azim=-45, elev=45)
 
         return fig
 
@@ -506,7 +492,6 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         loss = F.binary_cross_entropy_with_logits(pred_occ, input.occupancy, pos_weight=pos_weight)
         return MultiViewImageToVoxelPipelineOutput(
             pred_occ,
-            input.voxel,
             input.occupancy,
             input.images,
             loss,
@@ -569,7 +554,7 @@ def config_model(args):
 
 
 def config_dataloader(args):
-    dataset = NuScenesDataset(args.data_dir)
+    dataset = NuScenesDataset(args.data_dir, binary=args.num_classes == 2)
     index = list(range(len(dataset)))[2000:]
     dataset = Subset(dataset, index)
     sampler = DistributedSampler(dataset) if args.ddp else None

@@ -72,7 +72,6 @@ _camera_to_car_plane = roma.rotmat_to_unitquat(torch.from_numpy(_camera_to_car_p
 class NuScenesPointCloud:
     location: Tensor
     attribute: Tensor
-    voxel: Tensor
     occupancy: Tensor
     sample_token: List[str]
 
@@ -87,13 +86,11 @@ class NuScenesPointCloud:
         max_len = max([b.location.shape[-1] for b in batch])
         location = torch.cat([b._pad_sequence(b.location, max_len) for b in batch])
         attribute = torch.cat([b._pad_sequence(b.attribute, max_len) for b in batch])
-        voxel = torch.cat([b.voxel for b in batch])
         occupancy = torch.cat([b.occupancy for b in batch])
         sample_token = [b.sample_token for b in batch]
         return cls(
             location,
             attribute,
-            voxel,
             occupancy,
             sample_token,
             batch_size=[len(batch)],
@@ -168,59 +165,34 @@ class NuScenesPointCloud:
         return torch.from_numpy(np.load(file)["data"].astype(np.uint8))
 
     @classmethod
-    def _load_full_size_occupancy(cls, path: str) -> Tensor:
+    def _load_full_size_occupancy(cls, path: str, binary: bool = True) -> Tensor:
         points = torch.from_numpy(np.load(path)).t()
+        attrs = points[3].type(torch.long) + 1
         voxel = torch.zeros(512, 512, 64, dtype=torch.long)
-        voxel[points[2].long(), points[1].long(), points[0].long()] = points[3].type(torch.long) + 1
-        voxel = voxel > 0
-        voxel = voxel[None, None, ...]
-        return voxel
+        voxel[points[2].long(), points[1].long(), points[0].long()] = attrs
+
+        if binary:
+            voxel = voxel > 0
+            voxel = voxel[None, None, ...]
+        else:
+            voxel = F.one_hot(voxel, num_classes=18).permute(3, 0, 1, 2)
+            voxel = voxel[None, ...].bool()
+        return points, attrs, voxel
 
     @classmethod
-    def _load_occupancy(cls, path: str) -> Tensor:
-        points = torch.from_numpy(np.load(path)).t()
-        voxel = torch.zeros(512, 512, 64, dtype=torch.long)
-        voxel[points[2].long(), points[1].long(), points[0].long()] = points[3].type(torch.long) + 1
-        voxel = voxel > 0
-        voxel = voxel[None, None, ...]
-        voxel = F.interpolate(voxel.float(), size=(256, 256, 32), mode="trilinear", align_corners=False)
-        voxel = voxel > 0
-
-        points_ = points.clone().float()
-        points_[0] = points_[0] - 20
-        points_[1] = points_[1] - 256
-        points_[2] = points_[2] - 256
-        points_[0] /= 20
-        points_[1] /= 256
-        points_[2] /= 256
-        obs_ind = ops.filter_observable(points_[[2, 1, 0]], 0.05, 5)
-        obs_points = points[:, obs_ind]
-
-        obs_voxel = torch.zeros(512, 512, 64, dtype=torch.long)
-        obs_voxel[obs_points[2].long(), obs_points[1].long(), obs_points[0].long()] = obs_points[3].type(torch.long) + 1
-        obs_voxel = obs_voxel > 0
-        obs_voxel = obs_voxel[None, None, ...]
-        obs_voxel = F.interpolate(obs_voxel.float(), size=(256, 256, 32), mode="trilinear", align_corners=False)
-        obs_voxel = obs_voxel > 0
-
-        return (
-            points,
-            obs_voxel.contiguous(memory_format=torch.channels_last_3d),
-            voxel.contiguous(memory_format=torch.channels_last_3d),
-        )
+    def _load_occupancy(cls, path: str, binary: bool = True) -> Tensor:
+        points, attrs, occ = cls._load_full_size_occupancy(path, binary)
+        occ = F.interpolate(occ, size=(256, 256, 32), mode="trilinear", align_corners=False)
+        return points, attrs, occ
 
     @classmethod
-    def load(cls, metadata: dict) -> "NuScenesPointCloud":
+    def load(cls, metadata: dict, binary: bool = True) -> "NuScenesPointCloud":
         sample_token = metadata["sample_token"]
-        points, voxel, occupancy = cls._load_occupancy(metadata["occupancy"])
-
-        location = points[:3]
-        panoptic = points[[3]]
+        location, panoptic, occupancy = cls._load_occupancy(metadata["occupancy"], binary=binary)
         location = MemmapTensor.from_tensor(location[None, ...]).as_tensor()
         panoptic = MemmapTensor.from_tensor(panoptic[None, ...]).as_tensor()
-        voxel = MemmapTensor.from_tensor(voxel).as_tensor()
         occupancy = MemmapTensor.from_tensor(occupancy).as_tensor()
-        return cls(location, panoptic, voxel, occupancy, [sample_token], batch_size=[1])
+        return cls(location, panoptic, occupancy, [sample_token], batch_size=[1])
 
 
 @tensorclass
@@ -235,7 +207,7 @@ class NuScenesDatasetItem:
     lidar_top: NuScenesPointCloud
 
     @classmethod
-    def load(cls, metadata: dict) -> "NuScenesDatasetItem":
+    def load(cls, metadata: dict, binary: bool = True) -> "NuScenesDatasetItem":
         return cls(
             cam_front=NuScenesImage.load(metadata["CAM_FRONT"]),
             cam_front_left=NuScenesImage.load(metadata["CAM_FRONT_LEFT"]),
@@ -243,7 +215,7 @@ class NuScenesDatasetItem:
             cam_back=NuScenesImage.load(metadata["CAM_BACK"]),
             cam_back_left=NuScenesImage.load(metadata["CAM_BACK_LEFT"]),
             cam_back_right=NuScenesImage.load(metadata["CAM_BACK_RIGHT"]),
-            lidar_top=NuScenesPointCloud.load(metadata["LIDAR_TOP"]),
+            lidar_top=NuScenesPointCloud.load(metadata["LIDAR_TOP"], binary=binary),
             batch_size=[1],
         )
 
@@ -298,8 +270,9 @@ default_collate_fn_map[NuScenesDatasetItem] = NuScenesDatasetItem.collate_fn
 
 
 class NuScenesOccupancyDataset(Dataset):
-    def __init__(self, data_dir: str):
+    def __init__(self, data_dir: str, binary: bool = True):
         self.data_dir = data_dir
+        self.binary = binary
         self._paths = glob.glob(os.path.join(self.data_dir, "**", "*.npy"), recursive=True)
         self._paths = np.asarray(self._paths)
 
@@ -307,7 +280,7 @@ class NuScenesOccupancyDataset(Dataset):
         return len(self._paths)
 
     def __getitem__(self, index: int):
-        return NuScenesPointCloud._load_full_size_occupancy(self._paths[index])[0]
+        return NuScenesPointCloud._load_full_size_occupancy(self._paths[index], binary=self.binary)[-1][0]
 
 
 class NuScenesDataset(Dataset):
@@ -318,10 +291,12 @@ class NuScenesDataset(Dataset):
         verbose: bool = True,
         force_rebuild: bool = False,
         metadata_filename: Optional[str] = "metadata.parquet",
+        binary: bool = True,
     ):
         self.occupancy = self.build_occupancy_path(data_dir)
         self.data_dir = data_dir
         self.meta_path = os.path.join(data_dir, metadata_filename)
+        self.binary = binary
         if os.path.isfile(self.meta_path) and not force_rebuild:
             self.metadata = pd.read_parquet(self.meta_path)
             return

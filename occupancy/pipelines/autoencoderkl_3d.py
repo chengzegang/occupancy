@@ -73,7 +73,7 @@ class VoxelAugmentation(nn.Module):
 
 
 class AutoEncoderKL3dInput:
-    voxel: Tensor
+    occupancy: Tensor
     kl_weight: float = 0.0001
     clamp_min: float = -30
     clamp_max: float = 20
@@ -88,7 +88,7 @@ class AutoEncoderKL3dInput:
         device="cuda",
     ):
         voxel = voxel.type(dtype).to(device)
-        self.voxel = self.splicing(voxel)
+        self.occupancy = self.splicing(voxel)
         self.kl_weight = kl_weight
         self.clamp_min = clamp_min
         self.clamp_max = clamp_max
@@ -166,22 +166,23 @@ class AutoEncoderKL3dOutput:
     @property
     @torch.jit.unused
     def figure(self) -> plt.Figure:
-        ground_truth = self.ground_truth
-        i, j, k = torch.where(ground_truth[0, 0].detach().cpu() > 0)
+        i, j, k = None, None, None
+        ih, jh, kh = None, None, None
         c = None
-        if self.ground_truth.size(1) == 1:
-            c = k
-        else:
-            c = ground_truth[0, 0, i, j, k].detach().cpu()
-            c = self._CMAP[c]
-        prediction = self.prediction
-        ih, jh, kh = torch.where(prediction[0, 0].detach().cpu() >= 0)
         ch = None
-        if self.prediction.size(1) == 1:
+        if self.ground_truth.size(1) == 1:
+            i, j, k = torch.where(self.ground_truth[0, 0].detach().cpu() > 0)
+            ih, jh, kh = torch.where(self.prediction[0, 0].detach().cpu() >= 0)
+            c = k
             ch = kh
         else:
-            ch = prediction[0, 0, ih, jh, kh].detach().cpu()
-            ch = self._CMAP[ch]
+            i, j, k = torch.where(self.ground_truth[0].argmax(dim=0).detach().cpu() > 0)
+            c = self.ground_truth[0].argmax(dim=0)[i, j, k].detach().cpu()
+            c = self._CMAP[c] / 255.0
+
+            ih, jh, kh = torch.where(self.prediction[0].argmax(dim=0).detach().cpu() > 0)
+            ch = self.prediction[0].argmax(dim=0)[ih, jh, kh].detach().cpu()
+            ch = self._CMAP[ch] / 255.0
 
         fig = plt.figure(figsize=(20, 10))
         fig.suptitle(f"iou: {self.iou[0, 1].item():.2%}")
@@ -272,8 +273,9 @@ class AutoEncoderKL3d(nn.Module):
         input: AutoEncoderKL3dInput,
     ) -> AutoEncoderKL3dOutput:
         # NOTE: due to pytorch baddmm bug, we use pipeline optimization to force use of addmm
-        voxel = self.voxel_augmentation(input.voxel)
+        voxel = self.voxel_augmentation(input.occupancy)
         voxel = torch.unbind(voxel, dim=0)
+
         latent, pred_output = zip(*[self._forward_batchsize_one(v[None, ...]) for v in voxel])
         latent = torch.cat(latent, dim=0)
         pred_output = torch.cat(pred_output, dim=0)
@@ -281,7 +283,7 @@ class AutoEncoderKL3d(nn.Module):
         kl_loss = input.kl_weight * latent_dist.kl_loss
         return AutoEncoderKL3dOutput(
             pred_output,
-            input.voxel,
+            input.occupancy,
             kl_loss,
             latent_dist,
             latent_dist.sample(),
@@ -290,46 +292,6 @@ class AutoEncoderKL3d(nn.Module):
     @classmethod
     def from_config(cls, config: AutoEncoderKL3dConfig) -> "AutoEncoderKL3d":
         return cls(**asdict(config))
-
-
-class FusedAutoEncoderKL3dEncoder(nn.Module):
-    def __init__(self, model: AutoEncoderKL3d):
-        super().__init__()
-        self.quant = QuantStub()
-        self.encoder = model.encoder
-        self.dequant = DeQuantStub()
-
-    def forward(self, voxel_inputs: Tensor) -> Tensor:
-        return self.dequant(self.encoder(self.quant(voxel_inputs)))
-
-
-class FusedAutoEncoderKL3dDecoder(nn.Module):
-    def __init__(self, model: AutoEncoderKL3d):
-        super().__init__()
-        self.quant = QuantStub()
-        self.decoder = model.decoder
-        self.dequant = DeQuantStub()
-
-    def forward(self, voxel_inputs: Tensor) -> Tensor:
-        return self.dequant(self.decoder(self.quant(voxel_inputs)))
-
-
-class FusedAutoEncoderKL3d(nn.Module):
-    def __init__(self, model: AutoEncoderKL3d):
-        super().__init__()
-        self.encoder = FusedAutoEncoderKL3dEncoder(model)
-        self.decoder = FusedAutoEncoderKL3dDecoder(model)
-
-    def forward(self, voxel_inputs: Tensor) -> Tensor:
-        return self.decoder(self.encoder(voxel_inputs))
-
-    def encode(self, voxel_inputs: Tensor) -> GaussianDistribution:
-        latent = self.encoder(voxel_inputs)
-        latent_dist = GaussianDistribution.from_latent(latent)
-        return latent_dist
-
-    def decode(self, latent: Tensor) -> Tensor:
-        return self.decoder(latent)
 
 
 def load_model(model, path, partial=True):
@@ -359,7 +321,7 @@ def config_model(args):
 
 
 def config_dataloader(args):
-    dataset = NuScenesOccupancyDataset(args.data_dir)
+    dataset = NuScenesOccupancyDataset(args.data_dir, binary=args.num_classes == 2)
     sampler = None
     if args.ddp:
         sampler = DistributedSampler(dataset)
