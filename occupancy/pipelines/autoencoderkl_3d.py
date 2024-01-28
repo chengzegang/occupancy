@@ -157,7 +157,9 @@ class AutoEncoderKL3dOutput:
         population = torch.bincount(label.flatten(), minlength=18).float()
         weight = torch.pow(torch.numel(label) / population * 4 * math.pi / 3, 1 / 3)
         loss = F.cross_entropy(
-            self.prediction.transpose(1, -1).flatten(0, -2), label.flatten(), weight=weight.type_as(self.prediction)
+            self.prediction.permute(0, 2, 3, 4, 1).flatten(0, -2),
+            label.flatten(),
+            weight=weight.type_as(self.prediction),
         )
         return loss
 
