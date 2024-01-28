@@ -336,7 +336,7 @@ def config_model(args):
 
 
 def config_dataloader(args):
-    dataset = NuScenesOccupancyDataset(args.data_dir, binary=args.num_classes == 2)
+    dataset = NuScenesOccupancyDataset(args.data_dir, binary=args.num_classes == 1)
     sampler = None
     if args.ddp:
         sampler = DistributedSampler(dataset)

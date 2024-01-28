@@ -549,7 +549,7 @@ def config_model(args):
 
 
 def config_dataloader(args):
-    dataset = NuScenesDataset(args.data_dir, binary=args.num_classes == 2)
+    dataset = NuScenesDataset(args.data_dir, binary=args.num_classes == 1)
     index = list(range(len(dataset)))[2000:]
     dataset = Subset(dataset, index)
     sampler = DistributedSampler(dataset) if args.ddp else None
