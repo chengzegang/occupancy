@@ -79,9 +79,8 @@ class MultiViewImageToVoxelPipelineInput:
     images: Tensor
     occupancy: Tensor
 
-    def __init__(self, images: Tensor, voxel: Tensor, occupancy: Tensor):
+    def __init__(self, images: Tensor, occupancy: Tensor):
         self.images = images
-        self.voxel = voxel
         self.occupancy = occupancy
 
     @classmethod
@@ -155,11 +154,10 @@ class MultiViewImageToVoxelPipelineOutput:
         pos_weight=None,
     ):
         self.prediction = prediction
-        self.observable = ground_truth
+        self.ground_truth = ground_truth
         self.images = images
         self.loss = loss
         self.pos_weight = pos_weight
-        self.ground_truth = self.full
 
     @property
     @torch.jit.unused
