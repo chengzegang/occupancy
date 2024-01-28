@@ -505,7 +505,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
     def influence_radial_weight(self, voxel: Tensor) -> Tensor:
         total = voxel.numel()
         num_pos = voxel.sum()
-        pos_weight = math.pow((total / num_pos) * 4 * math.pi / 3, 1 / 3) * 2
+        pos_weight = math.pow((total / num_pos) * 4 * math.pi / 3, 1 / 3)
         return torch.tensor(pos_weight, device=voxel.device, dtype=voxel.dtype)
 
 
