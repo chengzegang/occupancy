@@ -225,7 +225,7 @@ def train(
             betas=(0.9, 0.996),
             eps=1e-8,
         )
-    total_steps = 2 * len(dl) // args.grad_accum
+    total_steps = args.total_epochs * len(dl) // args.grad_accum
     scheduler = CosineWarmupLR(optimizer, args.warmup_steps, total_steps)
     args.model_name = f"{args.model}-cls{args.num_classes}"
     with wandb.init(
@@ -263,7 +263,9 @@ def train(
                     scheduler.step()
                     optimizer.zero_grad()
 
-                pbar.set_description(f"Loss: {mean_loss.item():.4f}, LR: {scheduler.get_last_lr()[0]:.3e}")
+                pbar.set_description(
+                    f"Loss: {mean_loss.item():.4f}, LR: {scheduler.get_last_lr()[0]:.3e}, Grad. Step: {step // args.grad_accum}, Epoch: {ep}"
+                )
                 if step % args.save_every == 0 and torch.isfinite(mean_loss) and local_rank == 0:
                     record(run, output, model, args, step)
                 step += 1
