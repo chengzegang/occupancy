@@ -348,6 +348,7 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.encoder = nn.Conv2d(in_channels, self.hidden_size, 4, stride=4)
         self.grid_embeds = nn.Conv3d(3, self.hidden_size, 3, padding=1)
         self.transformer = Transformer(self.hidden_size, 32, self.hidden_size // 128, 128)
+        self.decoder = nn.Conv3d(self.hidden_size, out_channels, 3, stride=1)
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
         multiview = torch.cat(multiview.unbind(1), dim=-1)
@@ -373,8 +374,8 @@ class MultiViewImageToVoxelModel(nn.Module):
         )
         latent = self.transformer(latent)
         occ_latent = latent[:, :desired_numel].transpose(-1, -2).view(latent.shape[0], -1, *out_shape)
-
-        return occ_latent
+        output = self.decoder(occ_latent)
+        return output
 
 
 class MultiViewImageToVoxelPipeline(nn.Module):
