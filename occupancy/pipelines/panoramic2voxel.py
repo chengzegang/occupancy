@@ -376,7 +376,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             self.voxel_encoder_latent_dim,
             64,
             2,
-            3,
+            4,
         )
         self.image_augmentation = ImageAugmentation()
         self.image_autoencoderkl = AutoencoderKL.from_pretrained(
@@ -481,7 +481,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             with torch.no_grad():
                 input.images.data = self.image_augmentation(input.images.data.float()).type_as(input.images.data)
                 input.images.data = input.images.data[:, torch.randperm(input.images.data.shape[1])]
-        model_output = self.decode(input.images, (32, 32, 4))
+        model_output = self.decode(input.images, (16, 16, 2))
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
         pos_weight = self.influence_radial_weight(input.occupancy)
         loss = F.binary_cross_entropy_with_logits(pred_occ, input.occupancy, pos_weight=pos_weight)
