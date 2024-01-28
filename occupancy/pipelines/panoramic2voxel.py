@@ -343,36 +343,38 @@ class MultiViewImageToVoxelModel(nn.Module):
     ):
         super().__init__()
         self.in_channels = in_channels
-        self.hidden_size = 1536
+        self.hidden_size = 1024
         self.radius_channels = radius_channels
-        self.encoder = UnetEncoder2d(4, self.hidden_size, 512, 2, 2, out_norm=False)
+        self.encoder = nn.Conv2d(in_channels, self.hidden_size, 4, stride=4)
         self.grid_embeds = nn.Conv3d(3, self.hidden_size, 3, padding=1)
         self.transformer = Transformer(self.hidden_size, 32, self.hidden_size // 128, 128)
-        self.decoder = UnetConditionalAttentionDecoderWithoutShortcut3d(
-            out_channels, self.hidden_size, self.hidden_size, 512, 2, 2, 128
-        )
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
         multiview = torch.cat(multiview.unbind(1), dim=-1)
         multiview_latent = self.encoder(multiview)
-        desired_shape = (out_shape[0] // 4, out_shape[1] // 4, out_shape[2] // 4)
-        desired_numel = desired_shape[0] * desired_shape[1] * desired_shape[2]
+        desired_numel = out_shape[0] * out_shape[1] * out_shape[2]
         i, j, k = torch.meshgrid(
-            torch.linspace(-1, 1, desired_shape[0], device=multiview.device, dtype=multiview.dtype),
-            torch.linspace(-1, 1, desired_shape[1], device=multiview.device, dtype=multiview.dtype),
-            torch.linspace(-1, 1, desired_shape[2], device=multiview.device, dtype=multiview.dtype),
+            torch.linspace(-1, 1, out_shape[0], device=multiview.device, dtype=multiview.dtype),
+            torch.linspace(-1, 1, out_shape[1], device=multiview.device, dtype=multiview.dtype),
+            torch.linspace(-1, 1, out_shape[2], device=multiview.device, dtype=multiview.dtype),
             indexing="ij",
         )
         ijk = torch.stack([i, j, k], dim=0).unsqueeze(0)
         grid_embeds = self.grid_embeds(ijk).expand(multiview_latent.shape[0], -1, -1, -1, -1)
+        seed = torch.randn(
+            multiview_latent.shape[0],
+            desired_numel,
+            self.hidden_size,
+            device=multiview.device,
+            dtype=multiview.dtype,
+        )
         latent = torch.cat(
-            [grid_embeds.flatten(2).transpose(-1, -2), multiview_latent.flatten(2).transpose(-1, -2)], dim=1
+            [seed + grid_embeds.flatten(2).transpose(-1, -2), multiview_latent.flatten(2).transpose(-1, -2)], dim=1
         )
         latent = self.transformer(latent)
-        occ_latent = latent[:, :desired_numel].transpose(-1, -2).view(latent.shape[0], -1, *desired_shape)
-        multiview_latent = latent[:, desired_numel:].transpose(-1, -2).view_as(multiview_latent)
-        output = self.decoder(occ_latent, multiview_latent)
-        return output
+        occ_latent = latent[:, :desired_numel].transpose(-1, -2).view(latent.shape[0], -1, *out_shape)
+
+        return occ_latent
 
 
 class MultiViewImageToVoxelPipeline(nn.Module):
@@ -522,7 +524,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
     def influence_radial_weight(self, voxel: Tensor) -> Tensor:
         total = voxel.numel()
         num_pos = voxel.sum()
-        pos_weight = math.pow((total / num_pos) * 4 * math.pi / 3, 1 / 3)
+        pos_weight = math.pow((total / num_pos) * 4 * math.pi / 3, 1 / 3) * 2
         return torch.tensor(pos_weight, device=voxel.device, dtype=voxel.dtype)
 
 
