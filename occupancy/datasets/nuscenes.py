@@ -177,7 +177,7 @@ class NuScenesPointCloud:
         else:
             voxel = F.one_hot(voxel, num_classes=18).permute(3, 0, 1, 2)
             voxel = voxel[None, ...].bool()
-        return points, attrs.unsqueeze(0), voxel
+        return points, attrs[None, ...], voxel
 
     @classmethod
     def _load_occupancy(cls, path: str, binary: bool = True) -> Tensor:
