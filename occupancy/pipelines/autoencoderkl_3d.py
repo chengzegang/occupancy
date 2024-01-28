@@ -229,7 +229,7 @@ class AutoEncoderKL3dConfig:
     latent_dim: int = 16
     base_channels: int = 64
     multiplier: int = 2
-    num_layers: int = 3
+    num_layers: int = 4
 
 
 class AutoEncoderKL3d(nn.Module):
