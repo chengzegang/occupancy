@@ -110,10 +110,8 @@ class MultiViewImageToVoxelPipelineInput:
         batch.lidar_top.location = batch.lidar_top.location.to(device=device, dtype=dtype, non_blocking=True)
         batch.lidar_top.attribute = batch.lidar_top.attribute.to(device=device, non_blocking=True)
         occupancy = batch.lidar_top.occupancy.to(device=device, dtype=dtype, non_blocking=True)
-        voxel = batch.lidar_top.voxel.to(device=device, dtype=dtype, non_blocking=True)
         model_input = cls(
             images=images.data,
-            voxel=voxel,
             occupancy=occupancy,
         )
         return model_input
