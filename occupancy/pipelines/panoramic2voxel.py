@@ -77,7 +77,6 @@ class ImageAugmentation(nn.Module):
 
 class MultiViewImageToVoxelPipelineInput:
     images: Tensor
-    voxel: Tensor
     occupancy: Tensor
 
     def __init__(self, images: Tensor, voxel: Tensor, occupancy: Tensor):
