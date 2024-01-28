@@ -146,12 +146,20 @@ class AutoEncoderKL3dOutput:
     @property
     @torch.jit.ignore
     def recon_loss(self) -> Tensor:
-        return F.binary_cross_entropy_with_logits(
-            self.prediction,
-            self.ground_truth,
-            reduction="none",
-            pos_weight=torch.tensor(3.2, device=self.prediction.device),
+        if self.ground_truth.size(1) == 1:
+            return F.binary_cross_entropy_with_logits(
+                self.prediction,
+                self.ground_truth,
+                reduction="none",
+                pos_weight=torch.tensor(3.2, device=self.prediction.device),
+            )
+        label = self.ground_truth.argmax(dim=1)
+        population = torch.bincount(label.flatten(), minlength=18).float()
+        weight = torch.pow(torch.numel(label) / population, 1 / 3)
+        loss = F.cross_entropy(
+            self.prediction.transpose(1, -1).flatten(0, -2), label.flatten(), weight=weight.type_as(self.prediction)
         )
+        return loss
 
     @property
     @torch.jit.ignore
@@ -161,7 +169,12 @@ class AutoEncoderKL3dOutput:
     @property
     @torch.jit.unused
     def iou(self):
-        return ops.iou(self.prediction.flatten() >= 0, self.ground_truth.flatten() > 0, 2, 0)
+        if self.ground_truth.size(1) == 1:
+            return ops.iou(self.prediction.flatten() >= 0, self.ground_truth.flatten() > 0, 2, 0)
+        else:
+            return ops.iou(
+                self.prediction.argmax(dim=1).flatten() > 0, self.ground_truth.argmax(dim=1).flatten() > 0, 2, 0
+            )
 
     @property
     @torch.jit.unused
