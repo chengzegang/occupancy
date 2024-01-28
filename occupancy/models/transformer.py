@@ -101,7 +101,7 @@ class RotaryEmbedding(torch.nn.Module):
         # Generate and save the inverse frequency buffer (non trainable)
         max_seq_length = 65536
         inv_freq = 1.0 / (
-            max_seq_length ** (torch.arange(0, dim_model, 2, dtype=torch.float16, requires_grad=False) / dim_model)
+            max_seq_length ** (torch.arange(0, dim_model, 2, dtype=torch.float32, requires_grad=False) / dim_model)
         )
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
