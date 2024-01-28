@@ -177,12 +177,12 @@ class NuScenesPointCloud:
         else:
             voxel = F.one_hot(voxel, num_classes=18).permute(3, 0, 1, 2)
             voxel = voxel[None, ...].bool()
-        return points, attrs, voxel
+        return points, attrs.unsqueeze(1), voxel
 
     @classmethod
     def _load_occupancy(cls, path: str, binary: bool = True) -> Tensor:
         points, attrs, occ = cls._load_full_size_occupancy(path, binary)
-        occ = F.interpolate(occ.float(), size=(256, 256, 32), mode="trilinear", align_corners=False) > 0
+        occ = F.interpolate(occ.float(), size=(256, 256, 32), mode="trilinear", align_corners=False).bool()
         return points, attrs, occ
 
     @classmethod
@@ -192,6 +192,7 @@ class NuScenesPointCloud:
         location = MemmapTensor.from_tensor(location[None, ...]).as_tensor()
         panoptic = MemmapTensor.from_tensor(panoptic[None, ...]).as_tensor()
         occupancy = MemmapTensor.from_tensor(occupancy).as_tensor()
+        print(location.shape, panoptic.shape, occupancy.shape)
         return cls(location, panoptic, occupancy, [sample_token], batch_size=[1])
 
 
