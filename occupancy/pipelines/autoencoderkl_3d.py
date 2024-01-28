@@ -226,10 +226,10 @@ class AutoEncoderKL3dOutput:
 class AutoEncoderKL3dConfig:
     in_channels: int = 1
     out_channels: int = 1
-    latent_dim: int = 16
+    latent_dim: int = 512
     base_channels: int = 64
     multiplier: int = 2
-    num_layers: int = 4
+    num_layers: int = 5
 
 
 class AutoEncoderKL3d(nn.Module):
