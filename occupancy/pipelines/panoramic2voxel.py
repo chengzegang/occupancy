@@ -347,7 +347,7 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.radius_channels = radius_channels
         self.encoder = nn.Conv2d(in_channels, self.hidden_size, 4, stride=4)
         self.grid_embeds = nn.Conv3d(3, self.hidden_size, 3, padding=1)
-        self.transformer = Transformer(self.hidden_size, 32, self.hidden_size // 128, 128)
+        self.transformer = Transformer(self.hidden_size, 24, self.hidden_size // 128, 128)
         self.decoder = nn.Conv3d(self.hidden_size, out_channels, 3, stride=1)
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
