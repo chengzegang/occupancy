@@ -134,7 +134,7 @@ class NuScenesPointCloud:
         ignore_index: int = 0,
     ) -> Tensor:
         points = points / 0.5
-        # print(points[2].min())
+
         rot = R.from_euler("z", 90, degrees=True).as_matrix()
         rot = torch.from_numpy(rot).to(torch.float32).to(points.device)
         points[:3] = torch.matmul(rot, points[:3].type(torch.float32)).type_as(points)
