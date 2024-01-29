@@ -6,8 +6,8 @@
 #SBATCH --time=48:00:00
 #SBATCH --mem=128GB 
 #SBATCH --gres=gpu:a100:1
-#SBATCH --job-name=occ_vae
-#SBATCH --output=occ_vae.out
+#SBATCH --job-name=occ_vae18
+#SBATCH --output=occ_vae18.out
 
 singularity exec --nv \
         --overlay /scratch/zc2309/nuscenes.ext3:ro \
