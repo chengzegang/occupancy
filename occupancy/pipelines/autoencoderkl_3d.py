@@ -88,7 +88,7 @@ class AutoEncoderKL3dInput:
         device="cuda",
     ):
         voxel = voxel.type(dtype).to(device)
-        self.occupancy = self.splicing(voxel)
+        self.occupancy = voxel  # self.splicing(voxel)
         self.kl_weight = kl_weight
         self.clamp_min = clamp_min
         self.clamp_max = clamp_max
