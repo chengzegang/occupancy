@@ -195,20 +195,27 @@ class NuScenesPointCloud:
         return points, attrs[None, ...], voxel
 
     @classmethod
-    def _load_occupancy(cls, path: str, binary: bool = True, rotate: Optional[Tensor] = None) -> Tensor:
+    def _load_occupancy(
+        cls, path: str, binary: bool = True, scale_factor: Optional[float] = None, rotate: Optional[Tensor] = None
+    ) -> Tensor:
         points, attrs, occ = cls._load_full_size_occupancy(path, binary, rotate)
-        if binary:
-            occ = F.interpolate(occ.float(), size=(256, 256, 32), mode="nearest-exact").bool()
-        else:
-            occ = occ.float()
-            occ = F.interpolate(occ, size=(256, 256, 32), mode="nearest-exact").argmax(dim=1)
-            occ = F.one_hot(occ, num_classes=18).permute(0, 4, 1, 2, 3).bool()
+        if scale_factor is not None and scale_factor != 1.0:
+            if binary:
+                occ = F.interpolate(
+                    occ.float(), scale_factor=scale_factor, mode="trilinear", align_corners=True
+                ).bool()
+            else:
+                occ = occ.float()
+                occ = F.interpolate(occ, scale_factor=0.5, mode="trilinear", align_corners=True).argmax(dim=1)
+                occ = F.one_hot(occ, num_classes=18).permute(0, 4, 1, 2, 3).bool()
         return points, attrs, occ
 
     @classmethod
-    def load(cls, metadata: dict, binary: bool = True) -> "NuScenesPointCloud":
+    def load(
+        cls, metadata: dict, binary: bool = True, scale_factor: Optional[float] = None, rotate: Optional[Tensor] = None
+    ) -> "NuScenesPointCloud":
         sample_token = metadata["sample_token"]
-        location, panoptic, occupancy = cls._load_occupancy(metadata["occupancy"], binary=binary)
+        location, panoptic, occupancy = cls._load_occupancy(metadata["occupancy"], binary, scale_factor, rotate)
         location = MemmapTensor.from_tensor(location[None, ...]).as_tensor()
         panoptic = MemmapTensor.from_tensor(panoptic[None, ...]).as_tensor()
         occupancy = MemmapTensor.from_tensor(occupancy).as_tensor()
@@ -228,7 +235,7 @@ class NuScenesDatasetItem:
     lidar_top: NuScenesPointCloud
 
     @classmethod
-    def load(cls, metadata: dict, binary: bool = True) -> "NuScenesDatasetItem":
+    def load(cls, metadata: dict, binary: bool = True, scale_factor: Optional[None] = None) -> "NuScenesDatasetItem":
         return cls(
             cam_front=NuScenesImage.load(metadata["CAM_FRONT"]),
             cam_front_left=NuScenesImage.load(metadata["CAM_FRONT_LEFT"]),
@@ -236,7 +243,7 @@ class NuScenesDatasetItem:
             cam_back=NuScenesImage.load(metadata["CAM_BACK"]),
             cam_back_left=NuScenesImage.load(metadata["CAM_BACK_LEFT"]),
             cam_back_right=NuScenesImage.load(metadata["CAM_BACK_RIGHT"]),
-            lidar_top=NuScenesPointCloud.load(metadata["LIDAR_TOP"], binary=binary),
+            lidar_top=NuScenesPointCloud.load(metadata["LIDAR_TOP"], binary=binary, scale_factor=scale_factor),
             batch_size=[1],
         )
 
@@ -291,9 +298,10 @@ default_collate_fn_map[NuScenesDatasetItem] = NuScenesDatasetItem.collate_fn
 
 
 class NuScenesOccupancyDataset(Dataset):
-    def __init__(self, data_dir: str, binary: bool = True):
+    def __init__(self, data_dir: str, binary: bool = True, scale_factor: Optional[float] = 0.5):
         self.data_dir = data_dir
         self.binary = binary
+        self.scale_factor = scale_factor
         self._paths = glob.glob(os.path.join(self.data_dir, "**", "*.npy"), recursive=True)
         self._paths = np.asarray(self._paths)
 
@@ -303,7 +311,7 @@ class NuScenesOccupancyDataset(Dataset):
     def __getitem__(self, index: int):
         rot = R.from_euler("z", random.randint(0, 360), degrees=True).as_matrix()
         rot = torch.from_numpy(rot).to(torch.float32)
-        voxel = NuScenesPointCloud._load_occupancy(self._paths[index], self.binary, rot)[-1][0]
+        voxel = NuScenesPointCloud._load_occupancy(self._paths[index], self.binary, self.scale_factor, rot)[-1][0]
         return voxel
 
 
@@ -337,11 +345,13 @@ class NuScenesDataset(Dataset):
         force_rebuild: bool = False,
         metadata_filename: Optional[str] = "metadata.parquet",
         binary: bool = True,
+        scale_factor: Optional[float] = 0.5,
     ):
         self.occupancy = self.build_occupancy_path(data_dir)
         self.data_dir = data_dir
         self.meta_path = os.path.join(data_dir, metadata_filename)
         self.binary = binary
+        self.scale_factor = scale_factor
         if os.path.isfile(self.meta_path) and not force_rebuild:
             self.metadata = pd.read_parquet(self.meta_path)
             return
@@ -410,4 +420,4 @@ class NuScenesDataset(Dataset):
 
     def __getitem__(self, index: int) -> NuScenesDatasetItem:
         metadata = self.get_metadata(index)
-        return NuScenesDatasetItem.load(metadata, self.binary)
+        return NuScenesDatasetItem.load(metadata, self.binary, self.scale_factor)

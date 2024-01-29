@@ -196,33 +196,35 @@ class AutoEncoderKL3dOutput:
             c = k
             ch = kh
         else:
-            i, j, k = torch.where(self.ground_truth[0].argmax(dim=0).detach().cpu() > 0)
-            c = self.ground_truth[0].argmax(dim=0)[i, j, k].detach().cpu()
+            label = self.ground_truth[0].argmax(dim=0).detach().cpu()
+            i, j, k = torch.where(label)
+            c = label[i, j, k]
             c = self._CMAP[c] / 255.0
 
-            ih, jh, kh = torch.where(self.prediction[0].argmax(dim=0).detach().cpu() > 0)
-            ch = self.prediction[0].argmax(dim=0)[ih, jh, kh].detach().cpu()
+            pred = self.prediction[0].argmax(dim=0).detach().cpu()
+            ih, jh, kh = torch.where(pred)
+            ch = pred[ih, jh, kh]
             ch = self._CMAP[ch] / 255.0
 
         fig = plt.figure(figsize=(20, 10))
         fig.suptitle(f"iou: {self.iou[0, 1].item():.2%}")
         ax = fig.add_subplot(1, 2, 1, projection="3d")
-        ax.scatter(i, j, k, c=c, s=1, marker="s", alpha=0.8)
+        ax.scatter(i, j, k, c=c, s=1, marker="s")
         ax.set_title("Ground Truth")
-        ax.set_box_aspect((1, 1, 1 / 10))
-        ax.set_xlim(0, 256)
-        ax.set_ylim(0, 256)
+        ax.set_box_aspect((1, 1, label.shape[-1] / label.shape[-3]))
+        ax.set_xlim(0, label.shape[-3])
+        ax.set_ylim(0, label.shape[-2])
+        ax.set_zlim(0, label.shape[-1])
         ax.set_zticks([])
-        ax.view_init(azim=-45, elev=45)
 
         ax = fig.add_subplot(1, 2, 2, projection="3d")
-        ax.scatter(ih, jh, kh, c=ch, s=1, marker="s", alpha=0.8)
+        ax.scatter(ih, jh, kh, c=ch, s=1, marker="s")
         ax.set_title("Prediction")
-        ax.set_box_aspect((1, 1, 1 / 10))
-        ax.set_xlim(0, 256)
-        ax.set_ylim(0, 256)
+        ax.set_box_aspect((1, 1, label.shape[-1] / label.shape[-3]))
+        ax.set_xlim(0, label.shape[-3])
+        ax.set_ylim(0, label.shape[-2])
+        ax.set_zlim(0, label.shape[-1])
         ax.set_zticks([])
-        ax.view_init(azim=-45, elev=45)
 
         return fig
 
