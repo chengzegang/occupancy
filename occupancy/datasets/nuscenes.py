@@ -1,5 +1,6 @@
 from functools import cached_property
 import glob
+import random
 from typing import List, Optional, Tuple
 from matplotlib import pyplot as plt
 import torch
@@ -165,8 +166,22 @@ class NuScenesPointCloud:
         return torch.from_numpy(np.load(file)["data"].astype(np.uint8))
 
     @classmethod
-    def _load_full_size_occupancy(cls, path: str, binary: bool = True) -> Tensor:
+    def _load_full_size_occupancy(cls, path: str, binary: bool = True, rotate: Optional[Tensor] = None) -> Tensor:
         points = torch.from_numpy(np.load(path)).t()
+        if rotate is not None:
+            xyz = points[[2, 1, 0]].clone()
+            xyz[0] = xyz[0] - 256
+            xyz[1] = xyz[1] - 256
+            xyz[2] = xyz[2] - 20
+            xyz = torch.matmul(rotate, xyz.type_as(rotate)).type_as(points)
+            xyz[0] = xyz[0] + 256
+            xyz[1] = xyz[1] + 256
+            xyz[2] = xyz[2] + 20
+            points[[2, 1, 0]] = xyz
+
+            valid = (xyz[0] >= 0) & (xyz[0] < 512) & (xyz[1] >= 0) & (xyz[1] < 512) & (xyz[2] >= 0) & (xyz[2] < 64)
+            points = points[:, valid]
+
         attrs = points[3].type(torch.long) + 1
         voxel = torch.zeros(512, 512, 64, dtype=torch.long)
         voxel[points[2].long(), points[1].long(), points[0].long()] = attrs
@@ -180,8 +195,8 @@ class NuScenesPointCloud:
         return points, attrs[None, ...], voxel
 
     @classmethod
-    def _load_occupancy(cls, path: str, binary: bool = True) -> Tensor:
-        points, attrs, occ = cls._load_full_size_occupancy(path, binary)
+    def _load_occupancy(cls, path: str, binary: bool = True, rotate: Optional[Tensor] = None) -> Tensor:
+        points, attrs, occ = cls._load_full_size_occupancy(path, binary, rotate)
         if binary:
             occ = F.interpolate(occ.float(), size=(256, 256, 32), mode="trilinear", align_corners=False).bool()
         else:
@@ -285,7 +300,10 @@ class NuScenesOccupancyDataset(Dataset):
         return len(self._paths)
 
     def __getitem__(self, index: int):
-        return NuScenesPointCloud._load_occupancy(self._paths[index], binary=self.binary)[-1][0]
+        rot = R.from_euler("z", random.randint(0, 360), degrees=True).as_matrix()
+        rot = torch.from_numpy(rot).to(torch.float32)
+        voxel = NuScenesPointCloud._load_occupancy(self._paths[index], self.binary, rot)[-1][0]
+        return voxel
 
 
 class NuScenesDataset(Dataset):
