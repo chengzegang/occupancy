@@ -111,6 +111,7 @@ class MultiViewImageToVoxelPipelineInput:
         batch.lidar_top.location = batch.lidar_top.location.to(device=device, dtype=dtype, non_blocking=True)
         batch.lidar_top.attribute = batch.lidar_top.attribute.to(device=device, non_blocking=True)
         occupancy = batch.lidar_top.occupancy.to(device=device, dtype=dtype, non_blocking=True)
+
         model_input = cls(
             images=images.data,
             occupancy=occupancy,
@@ -165,7 +166,12 @@ class MultiViewImageToVoxelPipelineOutput:
     @property
     @torch.jit.unused
     def iou(self):
-        return ops.iou(self.prediction.flatten() >= 0, self.ground_truth.flatten() > 0, 2, 0)
+        if self.ground_truth.size(1) == 1:
+            return ops.iou(self.prediction.flatten() >= 0, self.ground_truth.flatten() > 0, 2, 0)
+        else:
+            return ops.iou(
+                self.prediction.argmax(dim=1).flatten() > 0, self.ground_truth.argmax(dim=1).flatten() > 0, 2, 0
+            )
 
     @property
     @torch.jit.unused
@@ -329,7 +335,6 @@ class MultiViewImageToVoxelModel(nn.Module):
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
         multiview = torch.cat(multiview.unbind(1), dim=-1)
         multiview_latent = self.encoder(multiview)
-        desired_numel = out_shape[0] * out_shape[1] * out_shape[2]
         i, j, k = torch.meshgrid(
             torch.linspace(-1, 1, out_shape[0], device=multiview.device, dtype=multiview.dtype),
             torch.linspace(-1, 1, out_shape[1], device=multiview.device, dtype=multiview.dtype),
@@ -470,7 +475,17 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         model_output = self.decode(input.images, (16, 16, 2))
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
         pos_weight = self.influence_radial_weight(input.occupancy)
-        loss = F.binary_cross_entropy_with_logits(pred_occ, input.occupancy, pos_weight=pos_weight)
+        if input.occupancy.shape[1] == 1:
+            loss = F.binary_cross_entropy_with_logits(
+                pred_occ,
+                input.occupancy,
+                pos_weight=torch.tensor(3.2, device=pred_occ.device, dtype=pred_occ.dtype),
+                reduction="none",
+            )
+        else:
+            loss = F.cross_entropy(
+                pred_occ, input.occupancy.argmax(dim=1), reduction="none", weight=pos_weight.type_as(pred_occ)
+            )
         return MultiViewImageToVoxelPipelineOutput(
             pred_occ,
             input.occupancy,
@@ -489,10 +504,16 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         self.decoder.load_state_dict(state_dict["decoder"], strict, assign)
 
     def influence_radial_weight(self, voxel: Tensor) -> Tensor:
-        total = voxel.numel()
-        num_pos = voxel.sum()
-        pos_weight = math.pow((total / num_pos) * 4 * math.pi / 3, 1 / 3)
-        return torch.tensor(pos_weight, device=voxel.device, dtype=voxel.dtype)
+        if voxel.shape[1] == 1:
+            total = voxel.numel()
+            num_pos = voxel.sum()
+            pos_weight = math.pow((total / num_pos) * 4 * math.pi / 3, 1 / 3)
+            return torch.tensor(pos_weight, device=voxel.device, dtype=voxel.dtype)
+        else:
+            label = voxel.argmax(dim=1)
+            population = torch.bincount(label.flatten(), minlength=18).float()
+            weight = torch.pow(torch.numel(label) / population * 4 * math.pi / 3, 1 / 3)
+            return weight
 
 
 def config_model(args):

@@ -409,4 +409,4 @@ class NuScenesDataset(Dataset):
 
     def __getitem__(self, index: int) -> NuScenesDatasetItem:
         metadata = self.get_metadata(index)
-        return NuScenesDatasetItem.load(metadata)
+        return NuScenesDatasetItem.load(metadata, self.binary)
