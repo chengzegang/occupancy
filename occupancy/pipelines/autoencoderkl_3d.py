@@ -24,7 +24,12 @@ from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 
 from occupancy import ops
-from occupancy.datasets.nuscenes import NuScenesDataset, NuScenesDatasetItem, NuScenesOccupancyDataset
+from occupancy.datasets.nuscenes import (
+    NuScenesDataset,
+    NuScenesDatasetItem,
+    NuScenesMixOccupancyDataset,
+    NuScenesOccupancyDataset,
+)
 from occupancy.models.unet_3d import UnetDecoder3d, UnetEncoder3d
 
 
@@ -340,7 +345,11 @@ def config_model(args):
 
 
 def config_dataloader(args):
-    dataset = NuScenesOccupancyDataset(args.data_dir, binary=args.num_classes == 1)
+    dataset = None
+    if args.num_classes == 1:
+        dataset = NuScenesMixOccupancyDataset(args.data_dir)
+    else:
+        dataset = NuScenesOccupancyDataset(args.data_dir, binary=args.num_classes == 1)
     sampler = None
     if args.ddp:
         sampler = DistributedSampler(dataset)

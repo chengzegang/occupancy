@@ -23,7 +23,7 @@ from occupancy.datasets.nuscenes import (
 )
 import torch.multiprocessing as mp
 import torch.distributed as dist
-from occupancy.models.transformer import Transformer
+from occupancy.models.transformer import ConditionalTransformer, Transformer
 from occupancy.models.unet_attention_2d import UnetAttention2d, UnetAttentionEncoder2d
 from occupancy.models.unet_attention_3d import UnetAttention3d, UnetAttentionEncoder3d
 from occupancy.models.unet_conditional_attention_3d import (
@@ -322,7 +322,7 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.radius_channels = radius_channels
         self.encoder = nn.Conv2d(in_channels, self.hidden_size, 4, stride=4)
         self.grid_embeds = nn.Conv3d(3, self.hidden_size, 3, padding=1)
-        self.transformer = Transformer(self.hidden_size, 32, self.hidden_size // 128, 128)
+        self.transformer = ConditionalTransformer(self.hidden_size, 32, self.hidden_size // 128, 128)
         self.decoder = nn.Conv3d(self.hidden_size, out_channels, 1)
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
@@ -344,11 +344,13 @@ class MultiViewImageToVoxelModel(nn.Module):
             device=multiview.device,
             dtype=multiview.dtype,
         )
-        latent = torch.cat(
-            [seed + grid_embeds.flatten(2).transpose(-1, -2), multiview_latent.flatten(2).transpose(-1, -2)], dim=1
+        # latent = torch.cat(
+        #    [seed + grid_embeds.flatten(2).transpose(-1, -2), multiview_latent.flatten(2).transpose(-1, -2)], dim=1
+        # )
+        latent = self.transformer(
+            seed + grid_embeds.flatten(2).transpose(-1, -2), multiview_latent.flatten(2).transpose(-1, -2)
         )
-        latent = self.transformer(latent)
-        occ_latent = latent[:, :desired_numel].transpose(-1, -2).view(latent.shape[0], -1, *out_shape)
+        occ_latent = latent.transpose(-1, -2).view(latent.shape[0], -1, *out_shape)
         output = self.decoder(occ_latent)
         return output
 
@@ -543,11 +545,7 @@ def config_model(args):
 
 
 def config_dataloader(args):
-    dataset = None
-    if args.num_classes == 1:
-        dataset = NuScenesMixOccupancyDataset(args.data_dir)
-    else:
-        dataset = NuScenesOccupancyDataset(args.data_dir, binary=args.num_classes == 1)
+    dataset = NuScenesDataset(args.data_dir, binary=args.num_classes == 1)
     index = list(range(len(dataset)))[2000:]
     dataset = Subset(dataset, index)
     sampler = DistributedSampler(dataset) if args.ddp else None
