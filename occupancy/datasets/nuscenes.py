@@ -198,9 +198,10 @@ class NuScenesPointCloud:
     def _load_occupancy(cls, path: str, binary: bool = True, rotate: Optional[Tensor] = None) -> Tensor:
         points, attrs, occ = cls._load_full_size_occupancy(path, binary, rotate)
         if binary:
-            occ = F.interpolate(occ.float(), size=(256, 256, 32), mode="trilinear", align_corners=False).bool()
+            occ = F.interpolate(occ.float(), size=(256, 256, 32), mode="nearest-exact").bool()
         else:
-            occ = F.interpolate(occ.float(), size=(256, 256, 32), mode="trilinear", align_corners=False).argmax(1)
+            occ = occ.float()
+            occ = F.interpolate(occ, size=(256, 256, 32), mode="nearest-exact").argmax(dim=1)
             occ = F.one_hot(occ, num_classes=18).permute(0, 4, 1, 2, 3).bool()
         return points, attrs, occ
 
