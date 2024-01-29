@@ -230,6 +230,7 @@ class AutoEncoderKL3dConfig:
     base_channels: int = 64
     multiplier: int = 2
     num_layers: int = 4
+    num_attention_layers: int = 3
 
 
 class AutoEncoderKL3d(nn.Module):
@@ -241,6 +242,7 @@ class AutoEncoderKL3d(nn.Module):
         base_channels: int = 64,
         multiplier: int = 2,
         num_layers: int = 3,
+        num_attention_layers: int = 3,
         exportable: bool = False,
     ):
         super().__init__()
@@ -252,6 +254,7 @@ class AutoEncoderKL3d(nn.Module):
             base_channels=base_channels,
             multiplier=multiplier,
             num_layers=num_layers,
+            num_attention_layers=num_attention_layers,
             exportable=exportable,
         )
         self.decoder = UnetDecoder3d(
@@ -260,6 +263,7 @@ class AutoEncoderKL3d(nn.Module):
             base_channels=base_channels,
             multiplier=multiplier,
             num_layers=num_layers,
+            num_attention_layers=num_attention_layers,
             exportable=exportable,
         )
 

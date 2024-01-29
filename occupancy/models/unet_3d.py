@@ -168,6 +168,7 @@ class UnetEncoder3d(nn.Module):
         base_channels: int = 64,
         multiplier: int = 2,
         num_layers: int = 3,
+        num_attention_layers: int = 1,
         exportable: bool = False,
     ):
         super().__init__()
@@ -187,11 +188,12 @@ class UnetEncoder3d(nn.Module):
 
         for i in range(num_layers):
             self.layers.append(UnetEncoderLayer3d(_in_channels[i], _out_channels[i]))
-        self.layers.append(
-            AttentionLayer3d(_out_channels[-1], num_heads, 128)
-            if not exportable
-            else ExportableAttentionLayer3d(_out_channels[-1], num_heads, 128)
-        )
+        for _ in range(num_attention_layers):
+            self.layers.append(
+                AttentionLayer3d(_out_channels[-1], num_heads, 128)
+                if not exportable
+                else ExportableAttentionLayer3d(_out_channels[-1], num_heads, 128)
+            )
         self.layers.append(SpatialRMSNorm(_out_channels[-1]))
         self.layers.append(nn.SiLU(True))
         self.layers.append(
@@ -257,6 +259,7 @@ class UnetDecoder3d(nn.Module):
         base_channels: int = 64,
         multiplier: int = 2,
         num_layers: int = 3,
+        num_attention_layers: int = 1,
         exportable: bool = False,
     ):
         super().__init__()
@@ -274,15 +277,16 @@ class UnetDecoder3d(nn.Module):
                 kernel_size=1,
             )
         )
-        self.layers.append(
-            AttentionLayer3d(
-                _in_channels[0],
-                num_heads,
-                128,
+        for _ in range(num_attention_layers):
+            self.layers.append(
+                AttentionLayer3d(
+                    _in_channels[0],
+                    num_heads,
+                    128,
+                )
+                if not exportable
+                else ExportableAttentionLayer3d(_in_channels[0], num_heads, 128)
             )
-            if not exportable
-            else ExportableAttentionLayer3d(_in_channels[0], num_heads, 128)
-        )
         for i in range(num_layers):
             self.layers.append(UnetDecoderLayer3d(_in_channels[i], _out_channels[i]))
         self.layers.append(SpatialRMSNorm(base_channels))
@@ -308,14 +312,15 @@ class Unet3d(nn.Module):
         base_channels: int = 64,
         multiplier: int = 2,
         num_layers: int = 3,
+        num_attention_layers: int = 1,
         exportable: bool = False,
     ):
         super().__init__()
         self.encoder = UnetEncoder3d(
-            in_channels, latent_dim, base_channels, multiplier, num_layers, exportable=exportable
+            in_channels, latent_dim, base_channels, multiplier, num_layers, num_attention_layers, exportable=exportable
         )
         self.decoder = UnetDecoder3d(
-            out_channels, latent_dim, base_channels, multiplier, num_layers, exportable=exportable
+            out_channels, latent_dim, base_channels, multiplier, num_layers, num_attention_layers, exportable=exportable
         )
 
     def forward(self, voxel_inputs: Tensor) -> Tensor:
