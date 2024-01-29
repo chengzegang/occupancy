@@ -362,7 +362,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
     ):
         super().__init__()
         self.num_classes = num_classes
-        self.voxel_encoder_latent_dim = 32
+        self.voxel_encoder_latent_dim = 64
         self.plane2polar_depth_channels = 8
         self.voxel_autoencoderkl = AutoEncoderKL3d(
             num_classes,

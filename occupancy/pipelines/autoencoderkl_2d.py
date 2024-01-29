@@ -292,7 +292,7 @@ class AutoEncoderKL3d(nn.Module):
         input: AutoEncoderKL3dInput,
     ) -> AutoEncoderKL3dOutput:
         # NOTE: due to pytorch baddmm bug, we use pipeline optimization to force use of addmm
-        voxel = input.occupancy  # self.voxel_augmentation(input.occupancy)
+        voxel = self.voxel_augmentation(input.occupancy)
         voxel = torch.unbind(voxel, dim=0)
 
         latent, pred_output = zip(*[self._forward_batchsize_one(v[None, ...]) for v in voxel])
