@@ -28,6 +28,7 @@ from occupancy.models.unet_attention_2d import UnetAttention2d, UnetAttentionEnc
 from occupancy.models.unet_attention_3d import UnetAttention3d, UnetAttentionEncoder3d
 from occupancy.models.unet_conditional_attention_3d import (
     UnetConditionalAttention3d,
+    UnetConditionalAttentionBottleNeck3d,
     UnetConditionalAttentionDecoderWithoutShortcut3d,
     UnetConditionalAttentionMiddleLayer3d,
 )
@@ -322,7 +323,7 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.radius_channels = radius_channels
         self.encoder = nn.Conv2d(in_channels, self.hidden_size, 4, stride=4)
         self.grid_embeds = nn.Conv3d(3, self.hidden_size, 3, padding=1)
-        self.transformer = ConditionalTransformer(self.hidden_size, 32, self.hidden_size // 128, 128)
+        self.transformer = UnetConditionalAttentionBottleNeck3d(self.hidden_size, self.hidden_size, 12, 128)
         self.decoder = nn.Conv3d(self.hidden_size, out_channels, 1)
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
@@ -337,21 +338,10 @@ class MultiViewImageToVoxelModel(nn.Module):
         )
         ijk = torch.stack([i, j, k], dim=0).unsqueeze(0)
         grid_embeds = self.grid_embeds(ijk).expand(multiview_latent.shape[0], -1, -1, -1, -1)
-        seed = torch.randn(
-            multiview_latent.shape[0],
-            desired_numel,
-            self.hidden_size,
-            device=multiview.device,
-            dtype=multiview.dtype,
-        )
-        # latent = torch.cat(
-        #    [seed + grid_embeds.flatten(2).transpose(-1, -2), multiview_latent.flatten(2).transpose(-1, -2)], dim=1
-        # )
-        latent = self.transformer(
-            seed + grid_embeds.flatten(2).transpose(-1, -2), multiview_latent.flatten(2).transpose(-1, -2)
-        )
-        occ_latent = latent.transpose(-1, -2).view(latent.shape[0], -1, *out_shape)
-        output = self.decoder(occ_latent)
+        grid_embeds = grid_embeds + torch.randn_like(grid_embeds) * 0.01
+        latent = self.transformer(grid_embeds, multiview_latent)
+        # occ_latent = latent.transpose(-1, -2).view(latent.shape[0], -1, *out_shape)
+        output = self.decoder(latent)
         return output
 
 
