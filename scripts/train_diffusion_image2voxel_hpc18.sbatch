@@ -6,11 +6,11 @@
 #SBATCH --time=48:00:00
 #SBATCH --mem=128GB 
 #SBATCH --gres=gpu:a100:1
-#SBATCH --job-name=occ_vae
-#SBATCH --output=occ_vae.out
+#SBATCH --job-name=occ_vae18
+#SBATCH --output=occ_vae18.out
 
 singularity exec --nv \
         --overlay /scratch/zc2309/nuscenes.ext3:ro \
 	    --overlay /scratch/$USER/containers/overlay.ext3:ro  \
 	    /scratch/work/public/singularity/cuda12.2.2-cudnn8.9.4-devel-ubuntu22.04.3.sif \
-	    /bin/bash -c "source /ext3/env.sh; cd /scratch/zc2309/occupancy; bash scripts/train_diffusion_image2voxel_hpc.sh"
+	    /bin/bash -c "source /ext3/env.sh; cd /scratch/zc2309/occupancy; bash scripts/train_diffusion_image2voxel_hpc18.sh"
