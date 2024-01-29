@@ -226,7 +226,7 @@ class AutoEncoderKL3dOutput:
 class AutoEncoderKL3dConfig:
     in_channels: int = 1
     out_channels: int = 1
-    latent_dim: int = 32
+    latent_dim: int = 64
     base_channels: int = 64
     multiplier: int = 2
     num_layers: int = 4

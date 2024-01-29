@@ -21,8 +21,8 @@ def voxelize(
     y_offset: int = 256,
     z_offset: int = 20,
     ignore_index: int = 0,
+    num_classes: int = 1,
 ) -> Tensor:
-    num_classes = labels.max().long().item() + 1
     voxel = torch.zeros(
         num_classes,
         x_size,
