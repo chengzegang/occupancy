@@ -306,6 +306,27 @@ class NuScenesOccupancyDataset(Dataset):
         return voxel
 
 
+class NuScenesMixOccupancyDataset(Dataset):
+    def __init__(self, data_dir: str):
+        self.data_dir = data_dir
+        self._paths = glob.glob(os.path.join(self.data_dir, "**", "*.npy"), recursive=True)
+        self._paths = np.asarray(self._paths)
+        self._dataset = NuScenesOccupancyDataset(data_dir, True)
+
+    def __len__(self):
+        return len(self._paths)
+
+    def __getitem__(self, index: int):
+        voxel = self._dataset[index]
+        other = self._dataset[random.randint(0, len(self._dataset) - 1)]
+        shape = voxel.shape[-3:]
+        x = random.randint(0, shape[0] - 1)
+        y = random.randint(0, shape[1] - 1)
+        z = random.randint(0, shape[2] - 1)
+        voxel[:, x:, y:, z:] = (voxel[:, x:, y:, z:] + other[:, x:, y:, z:]) / 2
+        return voxel
+
+
 class NuScenesDataset(Dataset):
     def __init__(
         self,

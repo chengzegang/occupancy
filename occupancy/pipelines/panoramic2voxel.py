@@ -18,6 +18,8 @@ from occupancy.datasets.nuscenes import (
     NuScenesDatasetItem,
     NuScenesImage,
     NuScenesDataset,
+    NuScenesMixOccupancyDataset,
+    NuScenesOccupancyDataset,
 )
 import torch.multiprocessing as mp
 import torch.distributed as dist
@@ -541,7 +543,11 @@ def config_model(args):
 
 
 def config_dataloader(args):
-    dataset = NuScenesDataset(args.data_dir, binary=args.num_classes == 1)
+    dataset = None
+    if args.num_classes == 1:
+        dataset = NuScenesMixOccupancyDataset(args.data_dir)
+    else:
+        dataset = NuScenesOccupancyDataset(args.data_dir, binary=args.num_classes == 1)
     index = list(range(len(dataset)))[2000:]
     dataset = Subset(dataset, index)
     sampler = DistributedSampler(dataset) if args.ddp else None
