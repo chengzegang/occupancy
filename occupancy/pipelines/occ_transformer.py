@@ -239,7 +239,8 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.hidden_size = 1024
         self.radius_channels = radius_channels
         self.occ_proj = nn.Linear(64, self.hidden_size)
-        self.encoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128)
+        # self.encoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128)
+        self.occ_embeds = nn.Embedding(16 * 16 * 2, self.hidden_size)
         self.position_embeds = nn.Embedding(16 * 16 * 2, self.hidden_size)
         self.register_buffer("position_ids", torch.arange(0, 10000, requires_grad=False).view(1, -1))
         self.transformer = ConditionalTransformer(self.hidden_size, 16, self.hidden_size // 128, 128)
@@ -252,8 +253,9 @@ class MultiViewImageToVoxelModel(nn.Module):
         occ_latent = occ_latent.flatten(2).transpose(-1, -2)
         n_pos = out_shape[0] * out_shape[1] * out_shape[2]
         pos_embeds = self.position_embeds(self.position_ids[:, :n_pos]).expand(occ_latent.shape[0], -1, -1)
-        occ_latent = self.occ_proj(occ_latent) + pos_embeds
-        occ_latent = self.encoder(occ_latent)
+        occ_embeds = self.occ_embeds(self.position_ids[:, :n_pos]).expand(occ_latent.shape[0], -1, -1)
+        occ_latent = self.occ_proj(occ_latent) + occ_embeds
+        # occ_latent = self.encoder(occ_latent)
         occ_latent = occ_latent[:, torch.randperm(occ_latent.shape[1])]
 
         occ_latent = (
@@ -381,25 +383,24 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             with torch.no_grad():
                 occ_latent = self.voxel_autoencoderkl.encode(input.occupancy).sample()
         model_output = self.decode(occ_latent, (16, 16, 2))
-        with torch.no_grad():
-            pred_occ = self.voxel_autoencoderkl.decode(model_output)
+        pred_occ = self.voxel_autoencoderkl.decode(model_output)
         pos_weight = self.influence_radial_weight(input.occupancy)
-        loss = F.mse_loss(occ_latent, model_output)
-        # if input.occupancy.shape[1] == 1:
-        #    loss = F.binary_cross_entropy_with_logits(
-        #        pred_occ,
-        #        input.occupancy,
-        #        pos_weight=torch.tensor(3.2, device=pred_occ.device, dtype=pred_occ.dtype),
-        #        reduction="none",
-        #    )
-        # else:
-        #    loss = F.cross_entropy(
-        #        pred_occ,
-        #        input.occupancy.argmax(dim=1),
-        #        reduction="none",
-        #        weight=pos_weight.type_as(pred_occ),
-        #        ignore_index=1,
-        #    )
+        # loss = F.mse_loss(occ_latent, model_output)
+        if input.occupancy.shape[1] == 1:
+            loss = F.binary_cross_entropy_with_logits(
+                pred_occ,
+                input.occupancy,
+                pos_weight=torch.tensor(3.2, device=pred_occ.device, dtype=pred_occ.dtype),
+                reduction="none",
+            )
+        else:
+            loss = F.cross_entropy(
+                pred_occ,
+                input.occupancy.argmax(dim=1),
+                reduction="none",
+                weight=pos_weight.type_as(pred_occ),
+                ignore_index=1,
+            )
         return MultiViewImageToVoxelPipelineOutput(
             pred_occ,
             input.occupancy,
