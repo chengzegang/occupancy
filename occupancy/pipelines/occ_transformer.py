@@ -80,41 +80,21 @@ class ImageAugmentation(nn.Module):
 
 
 class MultiViewImageToVoxelPipelineInput:
-    images: Tensor
     occupancy: Tensor
 
-    def __init__(self, images: Tensor, occupancy: Tensor):
-        self.images = images
+    def __init__(self, occupancy: Tensor):
         self.occupancy = occupancy
 
     @classmethod
     def from_nuscenes_dataset_item(
         cls,
-        batch: NuScenesDatasetItem,
+        batch: Tensor,
         dtype: torch.dtype = torch.float32,
         device: str | torch.device = "cpu",
     ) -> "MultiViewImageToVoxelPipelineInput":
-        images: NuScenesImage = torch.stack(
-            [
-                batch.cam_front_left,
-                batch.cam_front,
-                batch.cam_front_right,
-                batch.cam_back_right,
-                batch.cam_back,
-                batch.cam_back_left,
-            ],
-            dim=1,
-        )
-        images.data = images.data.to(device=device, dtype=dtype, non_blocking=True)
-        images.intrinsic = images.intrinsic.to(device=device, dtype=dtype, non_blocking=True)
-        images.rotation = images.rotation.to(device=device, dtype=dtype, non_blocking=True)
-        images.translation = images.translation.to(device=device, dtype=dtype, non_blocking=True)
-        batch.lidar_top.location = batch.lidar_top.location.to(device=device, dtype=dtype, non_blocking=True)
-        batch.lidar_top.attribute = batch.lidar_top.attribute.to(device=device, non_blocking=True)
-        occupancy = batch.lidar_top.occupancy.to(device=device, dtype=dtype, non_blocking=True)
+        occupancy = batch.to(device=device, dtype=dtype, non_blocking=True)
 
         model_input = cls(
-            images=images.data,
             occupancy=occupancy,
         )
         return model_input
@@ -123,7 +103,6 @@ class MultiViewImageToVoxelPipelineInput:
 class MultiViewImageToVoxelPipelineOutput:
     prediction: Tensor
     ground_truth: Tensor
-    images: Tensor
     loss: Optional[Tensor] = None
     pos_weight: Optional[Tensor] = None
 
@@ -154,13 +133,11 @@ class MultiViewImageToVoxelPipelineOutput:
         self,
         prediction: Tensor,
         ground_truth: Tensor,
-        images: Tensor,
         loss: Optional[Tensor] = None,
         pos_weight=None,
     ):
         self.prediction = prediction
         self.ground_truth = ground_truth
-        self.images = images
         self.loss = loss
         self.pos_weight = pos_weight
 
@@ -259,43 +236,33 @@ class MultiViewImageToVoxelModel(nn.Module):
     ):
         super().__init__()
         self.in_channels = in_channels
-        self.hidden_size = 2048
+        self.hidden_size = 1024
         self.radius_channels = radius_channels
-        self.patch_embeds = UnetEncoder2d(in_channels, self.hidden_size, self.hidden_size // (2**2), 2, 2)
-        self.position_embeds = nn.Embedding(16 * 16 * 2, self.hidden_size)
-        self.position_norm = RMSNorm(self.hidden_size)
-        self.register_buffer("position_ids", torch.arange(0, 10000, requires_grad=False).view(1, -1))
+        self.occ_proj = nn.Linear(64, self.hidden_size)
         self.encoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128)
-        self.encoder_out_norm = RMSNorm(self.hidden_size)
-        self.encoder_out_proj = nn.Linear(self.hidden_size, self.hidden_size)
-        self.cond_proj = nn.Linear(self.hidden_size // 2, self.hidden_size)
-        self.transformer = ConditionalTransformer(self.hidden_size, 8, self.hidden_size // 128, 128)
+        self.position_embeds = nn.Embedding(16 * 16 * 2, self.hidden_size)
+        self.register_buffer("position_ids", torch.arange(0, 10000, requires_grad=False).view(1, -1))
+        self.transformer = ConditionalTransformer(self.hidden_size, 16, self.hidden_size // 128, 128)
         self.out_norm = SpatialRMSNorm(self.hidden_size)
         self.out_conv = nn.Conv3d(self.hidden_size, out_channels, 1)
         self.nonlinear = nn.SiLU(True)
         self._last_grid = None
 
-    def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
-        multiview = torch.cat(multiview.unbind(1), dim=-1)
-        multiview_latent = self.patch_embeds(multiview)
-        multiview_dist = self.encoder(multiview_latent.flatten(2).transpose(-1, -2))
-        multiview_dist = self.encoder_out_proj(self.nonlinear(self.encoder_out_norm(multiview_dist)))
-        multiview_dist = GaussianDistribution.from_latent(multiview_dist.transpose(-1, -2), 0.1)
-        multiview_sample = multiview_dist.sample().transpose(-1, -2)
-        multiview_sample = self.cond_proj(multiview_sample)
+    def forward(self, occ_latent: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
+        occ_latent = occ_latent.flatten(2).transpose(-1, -2)
         n_pos = out_shape[0] * out_shape[1] * out_shape[2]
-        pos_embeds = self.position_embeds(self.position_ids[:, :n_pos]).expand(multiview_sample.shape[0], -1, -1)
-        pos_embeds = self.position_norm(pos_embeds)
+        pos_embeds = self.position_embeds(self.position_ids[:, :n_pos]).expand(occ_latent.shape[0], -1, -1)
+        occ_latent = self.occ_proj(occ_latent) + pos_embeds
+        occ_latent = self.encoder(occ_latent)
+        occ_latent = occ_latent[:, torch.randperm(occ_latent.shape[1])]
+
         occ_latent = (
-            self.transformer(pos_embeds, multiview_sample)
-            .transpose(-1, -2)
-            .view(multiview_sample.shape[0], -1, *out_shape)
+            self.transformer(pos_embeds, occ_latent).transpose(-1, -2).view(occ_latent.shape[0], -1, *out_shape)
         )
         occ_latent = self.out_norm(occ_latent)
         occ_latent = self.nonlinear(occ_latent)
         output = self.out_conv(occ_latent)
-        kl_loss = multiview_dist.kl_loss
-        return output, kl_loss
+        return output
 
 
 class MultiViewImageToVoxelPipeline(nn.Module):
@@ -348,16 +315,9 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         image_sample = torch.cat([torch.cat(chk, dim=-2) for chk in image_sample], dim=-1)
         return image_sample.detach()
 
-    def decode(self, images, voxel_shape) -> Tensor:
-        batch_size = images.shape[0]
-        num_images = images.shape[1]
-        with torch.no_grad():
-            multiview_sample = self.prepare_image(images.flatten(0, 1))
-
-        multiview_latent, kl_loss = self.decoder(
-            multiview_sample.view(batch_size, num_images, *multiview_sample.shape[1:]), voxel_shape
-        )
-        return multiview_latent, kl_loss
+    def decode(self, occ_latent, voxel_shape) -> Tensor:
+        occ_latent = self.decoder(occ_latent, voxel_shape)
+        return occ_latent
 
     def __call__(self, input: MultiViewImageToVoxelPipelineInput) -> MultiViewImageToVoxelPipelineOutput:
         return super().__call__(input)
@@ -417,31 +377,32 @@ class MultiViewImageToVoxelPipeline(nn.Module):
 
     def forward(self, input: MultiViewImageToVoxelPipelineInput) -> MultiViewImageToVoxelPipelineOutput:
         if self.training:
+            occ_latent = None
             with torch.no_grad():
-                input.images.data = self.image_augmentation(input.images.data.float()).type_as(input.images.data)
-        model_output, kl_loss = self.decode(input.images, (16, 16, 2))
-        pred_occ = self.voxel_autoencoderkl.decode(model_output)
+                occ_latent = self.voxel_autoencoderkl.encode(input.occupancy).sample()
+        model_output = self.decode(occ_latent, (16, 16, 2))
+        with torch.no_grad():
+            pred_occ = self.voxel_autoencoderkl.decode(model_output)
         pos_weight = self.influence_radial_weight(input.occupancy)
-        if input.occupancy.shape[1] == 1:
-            loss = F.binary_cross_entropy_with_logits(
-                pred_occ,
-                input.occupancy,
-                pos_weight=torch.tensor(3.2, device=pred_occ.device, dtype=pred_occ.dtype),
-                reduction="none",
-            )
-        else:
-            loss = F.cross_entropy(
-                pred_occ,
-                input.occupancy.argmax(dim=1),
-                reduction="none",
-                weight=pos_weight.type_as(pred_occ),
-                ignore_index=1,
-            )
-        loss = loss + kl_loss.mean() * 0.0001
+        loss = F.mse_loss(occ_latent, model_output)
+        # if input.occupancy.shape[1] == 1:
+        #    loss = F.binary_cross_entropy_with_logits(
+        #        pred_occ,
+        #        input.occupancy,
+        #        pos_weight=torch.tensor(3.2, device=pred_occ.device, dtype=pred_occ.dtype),
+        #        reduction="none",
+        #    )
+        # else:
+        #    loss = F.cross_entropy(
+        #        pred_occ,
+        #        input.occupancy.argmax(dim=1),
+        #        reduction="none",
+        #        weight=pos_weight.type_as(pred_occ),
+        #        ignore_index=1,
+        #    )
         return MultiViewImageToVoxelPipelineOutput(
             pred_occ,
             input.occupancy,
-            input.images,
             loss,
             pos_weight,
         )
@@ -465,7 +426,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             label = voxel.argmax(dim=1)
             population = torch.bincount(label.flatten(), minlength=18).float()
             weight = torch.pow(torch.numel(label) / population * 4 * math.pi / 3, 1 / 3)
-            weight[0] = weight[0] / 4
+            # weight[0] = weight[0]
             return weight
 
 
@@ -509,7 +470,10 @@ def config_model(args):
 
 
 def config_dataloader(args):
-    dataset = NuScenesDataset(args.data_dir, binary=args.num_classes == 1)
+    if args.num_classes == 1:
+        dataset = NuScenesMixOccupancyDataset(args.data_dir)
+    else:
+        dataset = NuScenesOccupancyDataset(args.data_dir, binary=args.num_classes == 1)
     index = list(range(len(dataset)))[2000:]
     dataset = Subset(dataset, index)
     sampler = DistributedSampler(dataset) if args.ddp else None

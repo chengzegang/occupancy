@@ -20,6 +20,8 @@ import threading
 
 from trimesh.voxel.ops import matrix_to_marching_cubes
 from torch.optim import swa_utils
+
+from occupancy.pipelines import occ_transformer
 from . import autoencoderkl_3d, panoramic2voxel, diffusion3d
 
 torch.backends.cudnn.enabled = True
@@ -92,6 +94,8 @@ def config_model(args: argparse.Namespace) -> nn.Module:
             return panoramic2voxel.config_model(args)
         case "diffusion3d":
             return diffusion3d.config_model(args)
+        case "occ_transformer":
+            return occ_transformer.config_model(args)
 
 
 def config_dataloader(args: argparse.Namespace) -> DataLoader:
@@ -102,6 +106,8 @@ def config_dataloader(args: argparse.Namespace) -> DataLoader:
             return panoramic2voxel.config_dataloader(args)
         case "diffusion3d":
             return diffusion3d.config_dataloader(args)
+        case "occ_transformer":
+            return occ_transformer.config_dataloader(args)
 
 
 def to_human_readable(num: int) -> str:
@@ -271,10 +277,10 @@ def train(
                     output, mean_loss = forward()
                     nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                     optimizer.step()
-                    scheduler.step()
-                    optimizer.zero_grad()
                     if ema_model is not None:
                         ema_model.update_parameters(model)
+                    scheduler.step()
+                    optimizer.zero_grad()
 
                 pbar.set_description(
                     f"Loss: {mean_loss.item():.4f}, LR: {scheduler.get_last_lr()[0]:.3e}, Grad. Step: {step // args.grad_accum}, Epoch: {ep}"

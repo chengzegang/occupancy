@@ -201,9 +201,7 @@ class NuScenesPointCloud:
         points, attrs, occ = cls._load_full_size_occupancy(path, binary, rotate)
         if scale_factor is not None and scale_factor != 1.0:
             if binary:
-                occ = F.interpolate(
-                    occ.float(), scale_factor=scale_factor, mode="trilinear", align_corners=True
-                ).bool()
+                occ = F.interpolate(occ.float(), scale_factor=scale_factor, mode="trilinear", align_corners=True).bool()
             else:
                 occ = occ.float()
                 occ = F.interpolate(occ, scale_factor=0.5, mode="trilinear", align_corners=True).argmax(dim=1)
@@ -312,6 +310,7 @@ class NuScenesOccupancyDataset(Dataset):
         rot = R.from_euler("z", random.randint(0, 360), degrees=True).as_matrix()
         rot = torch.from_numpy(rot).to(torch.float32)
         voxel = NuScenesPointCloud._load_occupancy(self._paths[index], self.binary, self.scale_factor, rot)[-1][0]
+        voxel = MemmapTensor.from_tensor(voxel).as_tensor()
         return voxel
 
 
@@ -333,6 +332,7 @@ class NuScenesMixOccupancyDataset(Dataset):
         y = random.randint(0, shape[1] - 1)
         z = random.randint(0, shape[2] - 1)
         voxel[:, x:, y:, z:] = (voxel[:, x:, y:, z:] + other[:, x:, y:, z:]) / 2
+        voxel = MemmapTensor.from_tensor(voxel).as_tensor()
         return voxel
 
 
