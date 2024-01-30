@@ -431,7 +431,11 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             )
         else:
             loss = F.cross_entropy(
-                pred_occ, input.occupancy.argmax(dim=1), reduction="none", weight=pos_weight.type_as(pred_occ)
+                pred_occ,
+                input.occupancy.argmax(dim=1),
+                reduction="none",
+                weight=pos_weight.type_as(pred_occ),
+                ignore_index=1,
             )
         loss = loss + kl_loss.mean() * 0.0001
         return MultiViewImageToVoxelPipelineOutput(
@@ -461,6 +465,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             label = voxel.argmax(dim=1)
             population = torch.bincount(label.flatten(), minlength=18).float()
             weight = torch.pow(torch.numel(label) / population * 4 * math.pi / 3, 1 / 3)
+            weight[0] = weight[0] / 3
             return weight
 
 
