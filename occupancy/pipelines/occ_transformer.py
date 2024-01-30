@@ -79,7 +79,7 @@ class ImageAugmentation(nn.Module):
         return self.transform(x)
 
 
-class MultiViewImageToVoxelPipelineInput:
+class OccupancyTransformerPipelineInput:
     occupancy: Tensor
 
     def __init__(self, occupancy: Tensor):
@@ -91,7 +91,7 @@ class MultiViewImageToVoxelPipelineInput:
         batch: Tensor,
         dtype: torch.dtype = torch.float32,
         device: str | torch.device = "cpu",
-    ) -> "MultiViewImageToVoxelPipelineInput":
+    ) -> "OccupancyTransformerPipelineInput":
         occupancy = batch.to(device=device, dtype=dtype, non_blocking=True)
 
         model_input = cls(
@@ -100,7 +100,7 @@ class MultiViewImageToVoxelPipelineInput:
         return model_input
 
 
-class MultiViewImageToVoxelPipelineOutput:
+class OccupancyTransformerPipelineOutput:
     prediction: Tensor
     ground_truth: Tensor
     loss: Optional[Tensor] = None
@@ -226,48 +226,71 @@ class MultiViewImageToVoxelConfig:
         # return cls(**config)
 
 
-class MultiViewImageToVoxelModel(nn.Module):
+class OccupancyTransformer(nn.Module):
     def __init__(
         self,
-        in_channels: int = 4,
-        out_channels: int = 16,
-        radius_channels: int = 8,
+        latent_dim: int = 64,
+        hidden_size: int = 1024,
+        num_layers: int = 16,
         **kwargs,
     ):
         super().__init__()
-        self.in_channels = in_channels
-        self.hidden_size = 1024
-        self.radius_channels = radius_channels
-        self.occ_proj = nn.Linear(64, self.hidden_size)
-        # self.encoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128)
-        self.occ_embeds = nn.Embedding(16 * 16 * 2, self.hidden_size)
-        self.position_embeds = nn.Embedding(16 * 16 * 2, self.hidden_size)
-        self.register_buffer("position_ids", torch.arange(0, 10000, requires_grad=False).view(1, -1))
-        self.transformer = ConditionalTransformer(self.hidden_size, 16, self.hidden_size // 128, 128)
-        self.out_norm = SpatialRMSNorm(self.hidden_size)
-        self.out_conv = nn.Conv3d(self.hidden_size, out_channels, 1)
-        self.nonlinear = nn.SiLU(True)
-        self._last_grid = None
-
-    def forward(self, occ_latent: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
-        occ_latent = occ_latent.flatten(2).transpose(-1, -2)
-        n_pos = out_shape[0] * out_shape[1] * out_shape[2]
-        pos_embeds = self.position_embeds(self.position_ids[:, :n_pos]).expand(occ_latent.shape[0], -1, -1)
-        occ_embeds = self.occ_embeds(self.position_ids[:, :n_pos]).expand(occ_latent.shape[0], -1, -1)
-        occ_latent = self.occ_proj(occ_latent) + occ_embeds
-        # occ_latent = self.encoder(occ_latent)
-        occ_latent = occ_latent[:, torch.randperm(occ_latent.shape[1])]
-
-        occ_latent = (
-            self.transformer(pos_embeds, occ_latent).transpose(-1, -2).view(occ_latent.shape[0], -1, *out_shape)
+        self.latent_dim = latent_dim
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.in_conv = nn.Conv3d(self.latent_dim, self.hidden_size, 1)
+        self.transformer = Transformer(
+            self.hidden_size, self.num_layers, self.hidden_size // 128, 128, max_seq_length=16 * 16 * 2
         )
-        occ_latent = self.out_norm(occ_latent)
-        occ_latent = self.nonlinear(occ_latent)
+        self.out_conv = nn.Conv3d(self.hidden_size, self.latent_dim, 1)
+
+    def forward(self, occ_latent: Tensor) -> Tensor:
+        occ_latent = self.in_conv(occ_latent)
+        occ_latent = self.transformer(occ_latent.flatten(2).transpose(-1, -2)).transpose(-1, -2).view_as(occ_latent)
         output = self.out_conv(occ_latent)
         return output
 
 
-class MultiViewImageToVoxelPipeline(nn.Module):
+@torch.jit.script
+def occ_shuffle(occ: Tensor, cube_size: int = 32):
+    total_cubes = (occ.shape[-3] // cube_size) * (occ.shape[-2] // cube_size) * (occ.shape[-1] // cube_size)
+    cubes = torch.zeros(occ.shape[0], occ.shape[1], total_cubes, cube_size, cube_size, cube_size)
+    for i in range(occ.shape[-3] // cube_size):
+        for j in range(occ.shape[-2] // cube_size):
+            for k in range(occ.shape[-1] // cube_size):
+                ind = (
+                    i * (occ.shape[-2] // cube_size) * (occ.shape[-1] // cube_size)
+                    + j * (occ.shape[-1] // cube_size)
+                    + k
+                )
+                cubes[:, :, ind] = occ[
+                    :,
+                    :,
+                    i * cube_size : (i + 1) * cube_size,
+                    j * cube_size : (j + 1) * cube_size,
+                    k * cube_size : (k + 1) * cube_size,
+                ]
+    cubes = cubes[:, :, torch.randperm(cubes.shape[2])]
+    shuffled = torch.zeros_like(occ)
+    for i in range(occ.shape[-3] // cube_size):
+        for j in range(occ.shape[-2] // cube_size):
+            for k in range(occ.shape[-1] // cube_size):
+                ind = (
+                    i * (occ.shape[-2] // cube_size) * (occ.shape[-1] // cube_size)
+                    + j * (occ.shape[-1] // cube_size)
+                    + k
+                )
+                shuffled[
+                    :,
+                    :,
+                    i * cube_size : (i + 1) * cube_size,
+                    j * cube_size : (j + 1) * cube_size,
+                    k * cube_size : (k + 1) * cube_size,
+                ] = cubes[:, :, ind]
+    return shuffled
+
+
+class OccupancyTransformerPipeline(nn.Module):
     def __init__(
         self,
         num_classes: int = 1,
@@ -291,10 +314,10 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             image_autoencoderkl_model_id, torch_dtype=torch.bfloat16, torchscript=True, device_map="auto"
         )
 
-        self.decoder = MultiViewImageToVoxelModel(
-            4,
+        self.decoder = OccupancyTransformer(
             self.voxel_encoder_latent_dim,
-            self.plane2polar_depth_channels,
+            1024,
+            16,
         )
         self.voxel_autoencoderkl.requires_grad_(False)
         self.image_autoencoderkl.requires_grad_(False)
@@ -318,10 +341,10 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         return image_sample.detach()
 
     def decode(self, occ_latent, voxel_shape) -> Tensor:
-        occ_latent = self.decoder(occ_latent, voxel_shape)
+        occ_latent = self.decoder(occ_latent)
         return occ_latent
 
-    def __call__(self, input: MultiViewImageToVoxelPipelineInput) -> MultiViewImageToVoxelPipelineOutput:
+    def __call__(self, input: OccupancyTransformerPipelineInput) -> OccupancyTransformerPipelineOutput:
         return super().__call__(input)
 
     def prepare_latent_dist(self, voxel: Tensor) -> GaussianDistribution:
@@ -377,11 +400,12 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         loss = F.binary_cross_entropy_with_logits(pred_voxel, voxel, reduction="none", pos_weight=pos_weight)
         return loss, pos_weight
 
-    def forward(self, input: MultiViewImageToVoxelPipelineInput) -> MultiViewImageToVoxelPipelineOutput:
+    def forward(self, input: OccupancyTransformerPipelineInput) -> OccupancyTransformerPipelineOutput:
         if self.training:
             occ_latent = None
             with torch.no_grad():
-                occ_latent = self.voxel_autoencoderkl.encode(input.occupancy).sample()
+                occ = occ_shuffle(input.occupancy, 32)
+                occ_latent = self.voxel_autoencoderkl.encode(occ).sample()
         model_output = self.decode(occ_latent, (16, 16, 2))
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
         pos_weight = self.influence_radial_weight(input.occupancy)
@@ -401,7 +425,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
                 weight=pos_weight.type_as(pred_occ),
                 ignore_index=1,
             )
-        return MultiViewImageToVoxelPipelineOutput(
+        return OccupancyTransformerPipelineOutput(
             pred_occ,
             input.occupancy,
             loss,
@@ -435,12 +459,12 @@ def config_model(args):
     image_autoencoderkl_model_id = os.path.join(args.save_dir, "image_autoencoderkl")
     model = None
     if os.path.exists(image_autoencoderkl_model_id):
-        model = MultiViewImageToVoxelPipeline(
+        model = OccupancyTransformerPipeline(
             num_classes=args.num_classes, image_autoencoderkl_model_id=image_autoencoderkl_model_id
         )
 
     else:
-        model = MultiViewImageToVoxelPipeline(num_classes=args.num_classes)
+        model = OccupancyTransformerPipeline(num_classes=args.num_classes)
         model.image_autoencoderkl.save_pretrained(image_autoencoderkl_model_id)
     try:
         path = os.path.join(args.save_dir, f"{args.model}-cls{args.num_classes}.pt")
@@ -467,7 +491,7 @@ def config_model(args):
     model.voxel_autoencoderkl.decoder = torch.jit.script(model.voxel_autoencoderkl.decoder)
     model.voxel_autoencoderkl.requires_grad_(False)
     model.image_autoencoderkl.requires_grad_(False)
-    return model, MultiViewImageToVoxelPipelineInput.from_nuscenes_dataset_item
+    return model, OccupancyTransformerPipelineInput.from_nuscenes_dataset_item
 
 
 def config_dataloader(args):

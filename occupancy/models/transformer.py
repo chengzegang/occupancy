@@ -95,17 +95,17 @@ def apply_rotary_pos_emb(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
 
 
 class RotaryEmbedding(torch.nn.Module):
-    def __init__(self, dim_model: int):
+    def __init__(self, dim_model: int, max_seq_length: int = 65536):
         super().__init__()
         self.dim_model = dim_model
+        self.max_seq_length = max_seq_length
         # Generate and save the inverse frequency buffer (non trainable)
-        max_seq_length = 65536
         inv_freq = 1.0 / (
-            max_seq_length ** (torch.arange(0, dim_model, 2, dtype=torch.float32, requires_grad=False) / dim_model)
+            self.max_seq_length ** (torch.arange(0, dim_model, 2, dtype=torch.float32, requires_grad=False) / dim_model)
         )
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
-        _cos_cached, s_sin_cached = self._update_cos_sin_tables(max_seq_length)
+        _cos_cached, s_sin_cached = self._update_cos_sin_tables(self.max_seq_length)
         self.register_buffer("_cos_cached", _cos_cached, persistent=False)
         self.register_buffer("_sin_cached", s_sin_cached, persistent=False)
 
@@ -131,7 +131,7 @@ def _naive_scaled_dot_product_flash_attention(Q: Tensor, K: Tensor, V: Tensor) -
 
 
 class Attention(nn.Module):
-    def __init__(self, hidden_states: int, num_heads: int, head_size: int):
+    def __init__(self, hidden_states: int, num_heads: int, head_size: int, max_seq_length: int = 65536):
         super().__init__()
         self.hidden_states = hidden_states
         self.num_heads = num_heads
@@ -157,17 +157,7 @@ class Attention(nn.Module):
             hidden_states,
             dtype=torch.bfloat16,
         )
-        self.rotary = RotaryEmbedding(head_size)
-
-        nn.init.normal_(self.q_proj.weight, std=1 / math.sqrt(num_heads * head_size))
-        nn.init.normal_(self.k_proj.weight, std=1 / math.sqrt(num_heads * head_size))
-        nn.init.normal_(self.v_proj.weight, std=1 / math.sqrt(num_heads * head_size))
-        nn.init.normal_(self.out_proj.weight, std=1 / math.sqrt(hidden_states))
-
-        nn.init.constant_(self.q_proj.bias, 0)
-        nn.init.constant_(self.k_proj.bias, 0)
-        nn.init.constant_(self.v_proj.bias, 0)
-        nn.init.constant_(self.out_proj.bias, 0)
+        self.rotary = RotaryEmbedding(head_size, max_seq_length)
 
     def forward(self, input_embeds: Tensor, attention_mask: Optional[Tensor] = None, is_causal: bool = False) -> Tensor:
         q = self.q_proj(input_embeds)
@@ -190,7 +180,7 @@ class Attention(nn.Module):
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, hidden_states: int, num_heads: int, head_size: int):
+    def __init__(self, hidden_states: int, num_heads: int, head_size: int, max_seq_length: int = 65536):
         super().__init__()
         self.hidden_states = hidden_states
         self.num_heads = num_heads
@@ -216,7 +206,7 @@ class CrossAttention(nn.Module):
             hidden_states,
             dtype=torch.bfloat16,
         )
-        self.rotary = RotaryEmbedding(head_size)
+        self.rotary = RotaryEmbedding(head_size, max_seq_length)
 
     def forward(
         self,
@@ -243,13 +233,13 @@ class CrossAttention(nn.Module):
 
 
 class DecoderLayer(nn.Module):
-    def __init__(self, hidden_size: int, num_heads: int, head_size: int):
+    def __init__(self, hidden_size: int, num_heads: int, head_size: int, max_seq_length: int = 65536):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_size = head_size
         self.ln1 = RMSNorm(hidden_size)
-        self.self_attn = Attention(hidden_size, num_heads, head_size)
+        self.self_attn = Attention(hidden_size, num_heads, head_size, max_seq_length)
 
         self.ln2 = RMSNorm(hidden_size)
         self.mlp = SwiGLU(hidden_size, hidden_size * 8 // 3, hidden_size)
@@ -269,16 +259,16 @@ class DecoderLayer(nn.Module):
 
 
 class ConditionalDecoderLayer(nn.Module):
-    def __init__(self, hidden_size: int, num_heads: int, head_size: int):
+    def __init__(self, hidden_size: int, num_heads: int, head_size: int, max_seq_length: int = 65536):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_size = head_size
         self.ln1 = RMSNorm(hidden_size)
-        self.self_attn = Attention(hidden_size, num_heads, head_size)
+        self.self_attn = Attention(hidden_size, num_heads, head_size, max_seq_length)
 
         self.ln2 = RMSNorm(hidden_size)
-        self.cross_attn = CrossAttention(hidden_size, num_heads, head_size)
+        self.cross_attn = CrossAttention(hidden_size, num_heads, head_size, max_seq_length)
 
         self.ln3 = RMSNorm(hidden_size)
         self.mlp = SwiGLU(hidden_size, hidden_size * 8 // 3, hidden_size)
@@ -314,6 +304,7 @@ class Transformer(nn.Module):
         num_layers: int,
         num_heads: int,
         head_size: int,
+        max_seq_length: int = 65536,
     ):
         super().__init__()
         self.hidden_size = hidden_size
@@ -321,7 +312,9 @@ class Transformer(nn.Module):
         self.num_heads = num_heads
         self.head_size = head_size
 
-        self.layers = nn.ModuleList([DecoderLayer(hidden_size, num_heads, head_size) for _ in range(num_layers)])
+        self.layers = nn.ModuleList(
+            [DecoderLayer(hidden_size, num_heads, head_size, max_seq_length) for _ in range(num_layers)]
+        )
 
     def forward(self, input_embeds: Tensor, attention_mask: Optional[Tensor] = None, is_causal: bool = False) -> Tensor:
         for layer in self.layers:
@@ -337,6 +330,7 @@ class ConditionalTransformer(nn.Module):
         num_layers: int,
         num_heads: int,
         head_size: int,
+        max_seq_length: int = 65536,
     ):
         super().__init__()
         self.hidden_size = hidden_size
@@ -345,7 +339,7 @@ class ConditionalTransformer(nn.Module):
         self.head_size = head_size
 
         self.layers = nn.ModuleList(
-            [ConditionalDecoderLayer(hidden_size, num_heads, head_size) for _ in range(num_layers)]
+            [ConditionalDecoderLayer(hidden_size, num_heads, head_size, max_seq_length) for _ in range(num_layers)]
         )
 
     def forward(
