@@ -248,73 +248,6 @@ class MultiViewImageToVoxelConfig:
         # return cls(**config)
 
 
-class VisionTransformerFeatureExtractor(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        patch_size: int,
-        hidden_size: int,
-        num_layers: int,
-    ):
-        super().__init__()
-        self.in_conv = nn.Conv2d(in_channels, hidden_size, patch_size, stride=patch_size)
-        self.decoder = Transformer(hidden_size, num_layers, hidden_size // 128, 128)
-
-    def forward(self, input: Tensor) -> Tensor:
-        embeds = self.in_conv(input)
-        embeds = self.decoder(embeds.flatten(2).transpose(-1, -2)).transpose(-1, -2).view_as(embeds)
-        return embeds
-
-
-class PanoramicUnet2d(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        latent_dim: int,
-        base_channels: int = 64,
-        multiplier: int = 2,
-        num_layers: int = 3,
-        num_attention_layers: int = 4,
-    ):
-        super().__init__()
-        self.encoder = unet_encoder2d(in_channels, latent_dim, base_channels, multiplier, num_layers)
-        self.placeholder = nn.Parameter(torch.randn(1, 1, latent_dim) / math.sqrt(latent_dim))
-        self.latent_transformer = Transformer(latent_dim, num_attention_layers, latent_dim // 128, 128)
-        self.decoder = unet_decoder2d(out_channels, latent_dim, base_channels, multiplier, num_layers)
-
-    def forward(self, voxel_inputs: Tensor) -> Tensor:
-        latent = self.encoder(voxel_inputs)
-        height, width = latent.shape[-2:]
-        desired_shape = (height, height * 2)
-        desired_numel = desired_shape[0] * desired_shape[1]
-        placeholder_embeds = self.placeholder.expand(latent.shape[0], desired_numel, -1)
-        latent = latent.flatten(2).transpose(-1, -2)
-        latent = torch.cat([placeholder_embeds, latent], dim=1)
-        latent = (
-            self.latent_transformer(latent)[:, :desired_numel]
-            .transpose(-1, -2)
-            .view(latent.shape[0], -1, *desired_shape)
-        )
-        return self.decoder(latent)
-
-
-class ConditionalUnetDecoder3d(nn.Module):
-    def __init__(self, n_channels: int, num_layers: int):
-        super().__init__()
-        self.layers = nn.ModuleList(
-            [
-                UnetConditionalAttentionMiddleLayer3d(n_channels, n_channels, n_channels // 128, 128)
-                for _ in range(num_layers)
-            ]
-        )
-
-    def forward(self, x: Tensor, y: Tensor) -> Tensor:
-        for layer in self.layers:
-            x = layer(x, y)
-        return x
-
-
 class MultiViewImageToVoxelModel(nn.Module):
     def __init__(
         self,
@@ -327,7 +260,7 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.in_channels = in_channels
         self.hidden_size = 1024
         self.radius_channels = radius_channels
-        self.encoder = nn.Conv2d(in_channels, self.hidden_size, 4, stride=4)
+        self.encoder = UnetEncoder2d(in_channels, self.hidden_size, 128, 2, 3)
         self.grid_embeds = nn.Conv3d(3, self.hidden_size, 3, padding=1)
         self.transformer = UnetConditionalAttentionBottleNeck3d(self.hidden_size, self.hidden_size, 12, 128)
         self.decoder = nn.Conv3d(self.hidden_size, out_channels, 1)
@@ -343,7 +276,7 @@ class MultiViewImageToVoxelModel(nn.Module):
         )
         ijk = torch.stack([i, j, k], dim=0).unsqueeze(0)
         grid_embeds = self.grid_embeds(ijk).expand(multiview_latent.shape[0], -1, -1, -1, -1)
-        grid_embeds = grid_embeds + torch.randn_like(grid_embeds) * 0.01
+        grid_embeds = grid_embeds + torch.randn_like(grid_embeds) * 0.02
         latent = self.transformer(grid_embeds, multiview_latent)
         # occ_latent = latent.transpose(-1, -2).view(latent.shape[0], -1, *out_shape)
         output = self.decoder(latent)

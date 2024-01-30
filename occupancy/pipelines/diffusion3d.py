@@ -31,7 +31,6 @@ from occupancy.models.unet_2d import UnetEncoder2d
 from occupancy.models.unet_3d import UnetDecoder3d, UnetEncoder3d
 from occupancy.models.unet_conditional_attention_3d import UnetConditionalAttentionDecoderWithoutShortcut3d
 from occupancy.models.unet_conditional_attention_timestep_3d import UnetConditionalAttention3d
-from occupancy.pipelines.panoramic2voxel import VisionTransformerFeatureExtractor
 from .autoencoderkl_3d import (
     AutoEncoderKL3dInput,
     AutoEncoderKL3dOutput,
