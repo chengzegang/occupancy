@@ -19,7 +19,7 @@ from tqdm import tqdm
 import threading
 
 from trimesh.voxel.ops import matrix_to_marching_cubes
-
+from torch.optim import swa_utils
 from . import autoencoderkl_3d, panoramic2voxel, diffusion3d
 
 torch.backends.cudnn.enabled = True
@@ -167,10 +167,18 @@ def record(run, output, model: nn.Module, args: argparse.Namespace, step: int):
     fig.savefig(f"{args.model_name}.png")
     run.log({"output": wandb.Image(fig)}, step=step)
     plt.close(fig)
-    prediction = output.prediction[0, 0] > 0
-    prediction = prediction.cpu().permute(1, 2, 0)
-    ground_truth = output.ground_truth[0, 0] > 0
-    ground_truth = ground_truth.cpu().permute(1, 2, 0)
+    prediction = None
+    ground_truth = None
+    if output.prediction.size(1) == 1:
+        prediction = output.prediction[0, 0] > 0
+        prediction = prediction.cpu().permute(1, 2, 0)
+        ground_truth = output.ground_truth[0, 0] > 0
+        ground_truth = ground_truth.cpu().permute(1, 2, 0)
+    else:
+        prediction = output.prediction[0].argmax(0)
+        prediction = prediction.cpu().permute(1, 2, 0)
+        ground_truth = output.ground_truth[0].argmax(0)
+        ground_truth = ground_truth.cpu().permute(1, 2, 0)
     if prediction.sum() > 0:
         save_sceen(prediction, f"{args.model_name}_prediction.glb")
         save_sceen(ground_truth, f"{args.model_name}_ground_truth.glb")
@@ -204,6 +212,9 @@ def train(
     model, model_input_cls = config_model(args)
     total_params = count_parameters(model)
     print(f"[rank {local_rank}] total params: {total_params}")
+    ema_model = None
+    if args.ema:
+        ema_model = swa_utils.AveragedModel(model, avg_fn=swa_utils.get_ema_avg_fn(0.9), use_buffers=True)
     if args.ddp:
         model = DDP(model, device_ids=[args.local_rank], gradient_as_bucket_view=True, static_graph=True)
     dl, sampler = config_dataloader(args)
@@ -262,6 +273,8 @@ def train(
                     optimizer.step()
                     scheduler.step()
                     optimizer.zero_grad()
+                    if ema_model is not None:
+                        ema_model.update_parameters(model)
 
                 pbar.set_description(
                     f"Loss: {mean_loss.item():.4f}, LR: {scheduler.get_last_lr()[0]:.3e}, Grad. Step: {step // args.grad_accum}, Epoch: {ep}"
@@ -290,6 +303,7 @@ if __name__ == "__main__":
     parser.add_argument("--total-epochs", type=int, default=100)
     parser.add_argument("--num-classes", type=int, default=1)
     parser.add_argument("--warmup-steps", type=int, default=0)
+    parser.add_argument("--ema", action="store_true", default=False)
 
     args = parser.parse_args()
     match args.dtype:

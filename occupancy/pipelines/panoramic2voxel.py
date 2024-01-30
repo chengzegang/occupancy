@@ -465,7 +465,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             label = voxel.argmax(dim=1)
             population = torch.bincount(label.flatten(), minlength=18).float()
             weight = torch.pow(torch.numel(label) / population * 4 * math.pi / 3, 1 / 3)
-            weight[0] = weight[0] / 3
+            weight[0] = weight[0] / 4
             return weight
 
 
