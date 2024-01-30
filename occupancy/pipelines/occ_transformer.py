@@ -242,7 +242,7 @@ class OccupancyTransformer(nn.Module):
         self.transformer = Transformer(
             self.hidden_size, self.num_layers, self.hidden_size // 128, 128, max_seq_length=16 * 16 * 2
         )
-        self.out_conv = nn.Conv3d(self.hidden_size, self.latent_dim, 1)
+        self.out_conv = nn.Conv3d(self.hidden_size, self.latent_dim * 2, 1)
 
     def forward(self, occ_latent: Tensor) -> Tensor:
         occ_latent = self.in_conv(occ_latent)
@@ -405,12 +405,15 @@ class OccupancyTransformerPipeline(nn.Module):
             occ_latent = None
             with torch.no_grad():
                 occ = occ_shuffle(input.occupancy, 32)
-                occ_latent = self.voxel_autoencoderkl.encode(occ).sample()
-                target_latent = self.voxel_autoencoderkl.encode(input.occupancy).sample()
+                occ_dist = self.voxel_autoencoderkl.encode(occ)
+                occ_latent = occ_dist.sample()
+                target_dist = self.voxel_autoencoderkl.encode(input.occupancy)
         model_output = self.decode(occ_latent, (16, 16, 2))
-        pred_occ = self.voxel_autoencoderkl.decode(model_output)
+        model_dist = GaussianDistribution.from_latent(model_output, self.voxel_autoencoderkl.latent_scale)
+        kl_loss = model_dist.kl_div(target_dist)
+        pred_occ = self.voxel_autoencoderkl.decode(model_dist.sample())
         pos_weight = self.influence_radial_weight(input.occupancy)
-        latent_loss = F.mse_loss(target_latent, model_output)
+        loss = None
         if input.occupancy.shape[1] == 1:
             loss = F.binary_cross_entropy_with_logits(
                 pred_occ,
@@ -424,13 +427,13 @@ class OccupancyTransformerPipeline(nn.Module):
                 weight=pos_weight.type_as(pred_occ),
                 ignore_index=1,
             )
-        loss = loss + latent_loss
         return OccupancyTransformerPipelineOutput(
             pred_occ,
             input.occupancy,
             loss,
             pos_weight,
         )
+        loss = loss + kl_loss
 
     def state_dict(self, *, prefix: str = "", keep_vars: bool = False) -> dict:
         state_dict = {
