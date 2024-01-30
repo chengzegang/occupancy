@@ -5,7 +5,7 @@ from torch import nn, Tensor
 import torch.nn.functional as F
 
 
-def vq(input: Tensor, weight: Tensor, commitment_cost: float = 0.25) -> Tensor:
+def vector_quantize(input: Tensor, weight: Tensor, commitment_cost: float = 0.25) -> Tensor:
     # Reshape input to [batch_size, num_channels, *]
     input_shape = input.shape
     weight = weight.view(weight.shape[0], -1, weight.shape[-1])

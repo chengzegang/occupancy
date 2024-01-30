@@ -23,10 +23,11 @@ from occupancy.datasets.nuscenes import (
 )
 import torch.multiprocessing as mp
 import torch.distributed as dist
-from occupancy.models.transformer import ConditionalTransformer, Transformer
+from occupancy.models.transformer import ConditionalTransformer, CrossAttention, Transformer
 from occupancy.models.unet_attention_2d import UnetAttention2d, UnetAttentionEncoder2d
 from occupancy.models.unet_attention_3d import UnetAttention3d, UnetAttentionEncoder3d
 from occupancy.models.unet_conditional_attention_3d import (
+    UnetAttentionBottleNeck3d,
     UnetConditionalAttention3d,
     UnetConditionalAttentionBottleNeck3d,
     UnetConditionalAttentionDecoderWithoutShortcut3d,
@@ -260,26 +261,29 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.in_channels = in_channels
         self.hidden_size = 1024
         self.radius_channels = radius_channels
-        self.encoder = UnetEncoder2d(in_channels, self.hidden_size, 128, 2, 3)
-        self.grid_embeds = nn.Conv3d(3, self.hidden_size, 3, padding=1)
-        self.transformer = UnetConditionalAttentionBottleNeck3d(self.hidden_size, self.hidden_size, 12, 128)
-        self.decoder = nn.Conv3d(self.hidden_size, out_channels, 1)
+        self.patch_embeds = UnetEncoder2d(in_channels, self.hidden_size, 256, 2, 2)
+        self.position_embeds = nn.Embedding(16 * 16 * 2, self.hidden_size)
+        self.register_buffer("position_ids", torch.arange(0, 10000, requires_grad=False).view(1, -1))
+        self.encoder = Transformer(self.hidden_size, 16, self.hidden_size // 128, 128)
+        self.transformer = UnetConditionalAttentionBottleNeck3d(self.hidden_size, self.hidden_size, 6, 128)
+        self.out_conv = nn.Conv3d(self.hidden_size, out_channels, 1)
+        self._last_grid = None
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
         multiview = torch.cat(multiview.unbind(1), dim=-1)
-        multiview_latent = self.encoder(multiview)
-        i, j, k = torch.meshgrid(
-            torch.linspace(-1, 1, out_shape[0], device=multiview.device, dtype=multiview.dtype),
-            torch.linspace(-1, 1, out_shape[1], device=multiview.device, dtype=multiview.dtype),
-            torch.linspace(-1, 1, out_shape[2], device=multiview.device, dtype=multiview.dtype),
-            indexing="ij",
+        multiview_latent = self.patch_embeds(multiview)
+        multiview_latent = (
+            self.encoder(multiview_latent.flatten(2).transpose(-1, -2)).transpose(-1, -2).view_as(multiview_latent)
         )
-        ijk = torch.stack([i, j, k], dim=0).unsqueeze(0)
-        grid_embeds = self.grid_embeds(ijk).expand(multiview_latent.shape[0], -1, -1, -1, -1)
-        grid_embeds = grid_embeds + torch.randn_like(grid_embeds) * 0.02
-        latent = self.transformer(grid_embeds, multiview_latent)
-        # occ_latent = latent.transpose(-1, -2).view(latent.shape[0], -1, *out_shape)
-        output = self.decoder(latent)
+        n_pos = out_shape[0] * out_shape[1] * out_shape[2]
+        pos_embeds = (
+            self.position_embeds(self.position_ids[:, :n_pos])
+            .expand(multiview_latent.shape[0], -1, -1)
+            .transpose(-1, -2)
+            .view(multiview_latent.shape[0], -1, *out_shape)
+        )
+        occ_latent = self.transformer(pos_embeds, multiview_latent)
+        output = self.out_conv(occ_latent)
         return output
 
 
@@ -404,7 +408,6 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         if self.training:
             with torch.no_grad():
                 input.images.data = self.image_augmentation(input.images.data.float()).type_as(input.images.data)
-                input.images.data = input.images.data[:, torch.randperm(input.images.data.shape[1])]
         model_output = self.decode(input.images, (16, 16, 2))
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
         pos_weight = self.influence_radial_weight(input.occupancy)

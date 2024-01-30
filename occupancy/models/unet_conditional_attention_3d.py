@@ -2,6 +2,8 @@ __all__ = ["attention_unet3d"]
 from typing import List, Optional, Tuple
 import torch
 from torch import nn, Tensor
+
+from occupancy.models.unet_attention_3d import Attention3d
 from .transformer import CrossAttention, Attention, RMSNorm, SwiGLU
 import torch.nn.functional as F
 from .unet_3d import SpatialRMSNorm
@@ -350,6 +352,18 @@ class UnetConditionalAttentionDecoder3d(nn.Module):
         return logits
 
 
+class UnetAttentionMiddleLayer3d(nn.Module):
+    def __init__(self, n_channels: int, num_heads: int, head_size: int):
+        super().__init__()
+        self.attention = Attention3d(n_channels, num_heads, head_size)
+        self.convolution = UnetConvolution3d(n_channels, n_channels)
+
+    def forward(self, input_embeds: Tensor) -> Tensor:
+        input_embeds = self.attention(input_embeds)
+        input_embeds = self.convolution(input_embeds)
+        return input_embeds
+
+
 class UnetConditionalAttentionMiddleLayer3d(nn.Module):
     def __init__(self, n_channels: int, condition_size: int, num_heads: int, head_size: int):
         super().__init__()
@@ -359,6 +373,19 @@ class UnetConditionalAttentionMiddleLayer3d(nn.Module):
     def forward(self, input_embeds: Tensor, condition_embeds: Tensor) -> Tensor:
         input_embeds = self.attention(input_embeds, condition_embeds)
         input_embeds = self.convolution(input_embeds)
+        return input_embeds
+
+
+class UnetAttentionBottleNeck3d(nn.Module):
+    def __init__(self, n_channels: int, num_layers: int, head_size: int):
+        super().__init__()
+        self.layers = nn.ModuleList()
+        for i in range(num_layers):
+            self.layers.append(UnetAttentionMiddleLayer3d(n_channels, n_channels // head_size, head_size))
+
+    def forward(self, input_embeds: Tensor) -> Tensor:
+        for layer in self.layers:
+            input_embeds = layer(input_embeds)
         return input_embeds
 
 
