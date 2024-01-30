@@ -280,7 +280,7 @@ class MultiViewImageToVoxelModel(nn.Module):
         multiview_latent = self.patch_embeds(multiview)
         multiview_dist = self.encoder(multiview_latent.flatten(2).transpose(-1, -2))
         multiview_dist = self.encoder_out_proj(self.nonlinear(self.encoder_out_norm(multiview_dist)))
-        multiview_dist = GaussianDistribution.from_latent(multiview_dist.transpose(-1, -2), 1.0)
+        multiview_dist = GaussianDistribution.from_latent(multiview_dist.transpose(-1, -2), 0.1)
         multiview_sample = multiview_dist.sample().transpose(-1, -2)
         multiview_sample = self.cond_proj(multiview_sample)
         n_pos = out_shape[0] * out_shape[1] * out_shape[2]
