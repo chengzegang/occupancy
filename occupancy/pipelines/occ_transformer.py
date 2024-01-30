@@ -406,25 +406,25 @@ class OccupancyTransformerPipeline(nn.Module):
             with torch.no_grad():
                 occ = occ_shuffle(input.occupancy, 32)
                 occ_latent = self.voxel_autoencoderkl.encode(occ).sample()
+                target_latent = self.voxel_autoencoderkl.encode(input.occupancy).sample()
         model_output = self.decode(occ_latent, (16, 16, 2))
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
         pos_weight = self.influence_radial_weight(input.occupancy)
-        # loss = F.mse_loss(occ_latent, model_output)
+        latent_loss = F.mse_loss(target_latent, model_output)
         if input.occupancy.shape[1] == 1:
             loss = F.binary_cross_entropy_with_logits(
                 pred_occ,
                 input.occupancy,
                 pos_weight=torch.tensor(3.2, device=pred_occ.device, dtype=pred_occ.dtype),
-                reduction="none",
             )
         else:
             loss = F.cross_entropy(
                 pred_occ,
                 input.occupancy.argmax(dim=1),
-                reduction="none",
                 weight=pos_weight.type_as(pred_occ),
                 ignore_index=1,
             )
+        loss = loss + latent_loss
         return OccupancyTransformerPipelineOutput(
             pred_occ,
             input.occupancy,
