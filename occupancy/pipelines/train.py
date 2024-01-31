@@ -23,6 +23,9 @@ from torch.optim import swa_utils
 
 from occupancy.pipelines import occ_transformer
 from . import autoencoderkl_3d, panoramic2voxel, diffusion3d
+import logging
+
+logger = logging.getLogger(__name__)
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
@@ -208,7 +211,7 @@ def train(
     args: argparse.Namespace,
 ):
     args.local_rank = local_rank
-    print(f"[rank {local_rank}] started")
+    logging.info(f"[rank {local_rank}] started")
     if args.ddp:
         args.device = torch.device("cuda", local_rank)
         os.environ["RANK"] = str(local_rank)
@@ -217,7 +220,7 @@ def train(
         torch.cuda.set_device(args.local_rank)
     model, model_input_cls = config_model(args)
     total_params = count_parameters(model)
-    print(f"[rank {local_rank}] total params: {total_params}")
+    logging.info(f"[rank {local_rank}] total params: {total_params}")
     ema_model = None
     if args.ema:
         ema_model = swa_utils.AveragedModel(model, avg_fn=swa_utils.get_ema_avg_fn(0.9), use_buffers=True)
