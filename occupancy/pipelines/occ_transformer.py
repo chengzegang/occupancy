@@ -430,13 +430,13 @@ class OccupancyTransformerPipeline(nn.Module):
                 weight=pos_weight.type_as(pred_occ),
                 ignore_index=1,
             )
+        loss = loss + kl_loss
         return OccupancyTransformerPipelineOutput(
             pred_occ,
             input.occupancy,
             loss,
             pos_weight,
         )
-        loss = loss + kl_loss
 
     def state_dict(self, *, prefix: str = "", keep_vars: bool = False) -> dict:
         state_dict = {
