@@ -247,7 +247,7 @@ def train(
     args.model_name = f"{args.model}-cls{args.num_classes}"
     with wandb.init(
         project="occupancy",
-        name=f"{args.model_name}-" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S"),
+        name=f"{args.model_name}-[rank {local_rank}]" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S"),
         config=args,
     ) as run:
         run.watch(model)
