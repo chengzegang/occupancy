@@ -43,6 +43,7 @@ dependencies = [
   "tqdm",
   "trimesh",
   "pandas",
+  "scikit-image"
 ]
 
 

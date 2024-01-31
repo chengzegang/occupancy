@@ -296,10 +296,11 @@ default_collate_fn_map[NuScenesDatasetItem] = NuScenesDatasetItem.collate_fn
 
 
 class NuScenesOccupancyDataset(Dataset):
-    def __init__(self, data_dir: str, binary: bool = True, scale_factor: Optional[float] = 0.5):
+    def __init__(self, data_dir: str, binary: bool = True, scale_factor: Optional[float] = 0.5, mmap: bool = False):
         self.data_dir = data_dir
         self.binary = binary
         self.scale_factor = scale_factor
+        self.mmap = mmap
         self._paths = glob.glob(os.path.join(self.data_dir, "**", "*.npy"), recursive=True)
         self._paths = np.asarray(self._paths)
 
@@ -310,7 +311,8 @@ class NuScenesOccupancyDataset(Dataset):
         rot = R.from_euler("z", random.randint(0, 360), degrees=True).as_matrix()
         rot = torch.from_numpy(rot).to(torch.float32)
         voxel = NuScenesPointCloud._load_occupancy(self._paths[index], self.binary, self.scale_factor, rot)[-1][0]
-        voxel = MemmapTensor.from_tensor(voxel).as_tensor()
+        if self.mmap:
+            voxel = MemmapTensor.from_tensor(voxel).as_tensor()
         return voxel
 
 
