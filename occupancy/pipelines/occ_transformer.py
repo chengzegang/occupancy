@@ -252,8 +252,9 @@ class OccupancyTransformer(nn.Module):
 
 
 @torch.jit.script
-def occ_shuffle(occ: Tensor, cube_size: int = 32):
+def occ_shuffle(occ: Tensor, cube_size: int = 32, shuffle_rato: float = 0.2):
     total_cubes = (occ.shape[-3] // cube_size) * (occ.shape[-2] // cube_size) * (occ.shape[-1] // cube_size)
+    total_shuffle = int(total_cubes * shuffle_rato)
     cubes = torch.zeros(occ.shape[0], occ.shape[1], total_cubes, cube_size, cube_size, cube_size)
     for i in range(occ.shape[-3] // cube_size):
         for j in range(occ.shape[-2] // cube_size):
@@ -270,7 +271,9 @@ def occ_shuffle(occ: Tensor, cube_size: int = 32):
                     j * cube_size : (j + 1) * cube_size,
                     k * cube_size : (k + 1) * cube_size,
                 ]
-    cubes = cubes[:, :, torch.randperm(cubes.shape[2])]
+    ind_to_shuffle = torch.randperm(total_cubes)[:total_shuffle]
+    shuffle_ind = torch.randperm(total_shuffle)
+    cubes[:, :, ind_to_shuffle] = cubes[:, :, ind_to_shuffle][:, :, shuffle_ind]
     shuffled = torch.zeros_like(occ)
     for i in range(occ.shape[-3] // cube_size):
         for j in range(occ.shape[-2] // cube_size):
@@ -317,7 +320,7 @@ class OccupancyTransformerPipeline(nn.Module):
         self.decoder = OccupancyTransformer(
             self.voxel_encoder_latent_dim,
             1024,
-            16,
+            32,
         )
         self.voxel_autoencoderkl.requires_grad_(False)
         self.image_autoencoderkl.requires_grad_(False)
@@ -404,7 +407,7 @@ class OccupancyTransformerPipeline(nn.Module):
         if self.training:
             occ_latent = None
             with torch.no_grad():
-                occ = occ_shuffle(input.occupancy, 32)
+                occ = occ_shuffle(input.occupancy, 32, random.random())
                 occ_dist = self.voxel_autoencoderkl.encode(occ)
                 occ_latent = occ_dist.sample()
                 target_dist = self.voxel_autoencoderkl.encode(input.occupancy)
