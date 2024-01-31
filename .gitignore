@@ -167,3 +167,5 @@ wandb/
 !models/occ_transformer-*
 *.obj
 *.glb
+data/
+*.png
