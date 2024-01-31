@@ -294,10 +294,11 @@ default_collate_fn_map[NuScenesDatasetItem] = NuScenesDatasetItem.collate_fn
 
 
 class NuScenesOccupancyDataset(Dataset):
-    def __init__(self, data_dir: str, binary: bool = True, scale_factor: Optional[float] = 0.5):
+    def __init__(self, data_dir: str, binary: bool = True, scale_factor: Optional[float] = 0.5, mmap: bool = False):
         self.data_dir = data_dir
         self.binary = binary
         self.scale_factor = scale_factor
+        self.mmap = mmap
         self._paths = glob.glob(os.path.join(self.data_dir, "**", "*.npy"), recursive=True)
         self._paths = np.asarray(self._paths)
 

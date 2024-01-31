@@ -1,5 +1,5 @@
-conda create -n occupancy python=3.11
-conda install -n occupancy pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+conda create -n occupancy python=3.11 -y --solver libmamba
+conda install -n occupancy pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia -y --solver libmamba
 conda run -n occupancy pip install -e .
 mkdir data
 cd data
