@@ -168,3 +168,4 @@ wandb/
 *.obj
 *.glb
 data/
+*.png

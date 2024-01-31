@@ -23,7 +23,7 @@ from torch.optim import swa_utils
 
 from occupancy.pipelines import occ_transformer
 from . import autoencoderkl_3d, panoramic2voxel, diffusion3d
-
+import logging
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.benchmark_limit = 10
