@@ -320,7 +320,7 @@ class OccupancyTransformerPipeline(nn.Module):
         self.decoder = OccupancyTransformer(
             self.voxel_encoder_latent_dim,
             1024,
-            32,
+            16,
         )
         self.voxel_autoencoderkl.requires_grad_(False)
         self.image_autoencoderkl.requires_grad_(False)
