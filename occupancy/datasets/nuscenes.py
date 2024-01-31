@@ -8,7 +8,7 @@ from torch.utils.data import Dataset
 import os
 from PIL import Image as PILImage
 from torch import Tensor
-from tensordict import tensorclass, MemmapTensor
+from tensordict import tensorclass, MemoryMappedTensor
 from nuscenes import NuScenes
 import numpy as np
 from torch.utils.data._utils.collate import default_collate_fn_map
@@ -38,12 +38,10 @@ class NuScenesImage:
         data = TF.pil_to_tensor(PILImage.open(path))
         data = TF.to_dtype(data, torch.float32, scale=True)
         data = TF.resize(data, size=(data.size(-2) // 2, data.size(-1) // 2), antialias=True)
-        data = MemmapTensor.from_tensor(data).as_tensor()
-        rotation = MemmapTensor.from_tensor(roma.quat_wxyz_to_xyzw(torch.as_tensor(metadata["rotation"]))).as_tensor()
-        translation = MemmapTensor.from_tensor(torch.as_tensor(metadata["translation"])).as_tensor()
-        intrinsic = MemmapTensor.from_tensor(
-            torch.from_numpy(np.stack(metadata["camera_intrinsic"].tolist()))
-        ).as_tensor()
+        data = MemoryMappedTensor.from_tensor(data)
+        rotation = MemoryMappedTensor.from_tensor(roma.quat_wxyz_to_xyzw(torch.as_tensor(metadata["rotation"])))
+        translation = MemoryMappedTensor.from_tensor(torch.as_tensor(metadata["translation"]))
+        intrinsic = MemoryMappedTensor.from_tensor(torch.from_numpy(np.stack(metadata["camera_intrinsic"].tolist())))
         return cls(
             data.unsqueeze(0).contiguous(memory_format=torch.channels_last),
             intrinsic.unsqueeze(0),
@@ -214,9 +212,9 @@ class NuScenesPointCloud:
     ) -> "NuScenesPointCloud":
         sample_token = metadata["sample_token"]
         location, panoptic, occupancy = cls._load_occupancy(metadata["occupancy"], binary, scale_factor, rotate)
-        location = MemmapTensor.from_tensor(location[None, ...]).as_tensor()
-        panoptic = MemmapTensor.from_tensor(panoptic[None, ...]).as_tensor()
-        occupancy = MemmapTensor.from_tensor(occupancy).as_tensor()
+        location = MemoryMappedTensor.from_tensor(location[None, ...])
+        panoptic = MemoryMappedTensor.from_tensor(panoptic[None, ...])
+        occupancy = MemoryMappedTensor.from_tensor(occupancy)
 
         return cls(location, panoptic, occupancy, [sample_token], batch_size=[1])
 
@@ -289,7 +287,7 @@ class NuScenesDatasetItem:
         return fig
 
 
-default_collate_fn_map[MemmapTensor] = default_collate_fn_map[Tensor]
+default_collate_fn_map[MemoryMappedTensor] = default_collate_fn_map[Tensor]
 default_collate_fn_map[NuScenesImage] = NuScenesImage.collate_fn
 default_collate_fn_map[NuScenesPointCloud] = NuScenesPointCloud.collate_fn
 default_collate_fn_map[NuScenesDatasetItem] = NuScenesDatasetItem.collate_fn
@@ -310,7 +308,7 @@ class NuScenesOccupancyDataset(Dataset):
         rot = R.from_euler("z", random.randint(0, 360), degrees=True).as_matrix()
         rot = torch.from_numpy(rot).to(torch.float32)
         voxel = NuScenesPointCloud._load_occupancy(self._paths[index], self.binary, self.scale_factor, rot)[-1][0]
-        voxel = MemmapTensor.from_tensor(voxel).as_tensor()
+        voxel = MemoryMappedTensor.from_tensor(voxel)
         return voxel
 
 
@@ -332,7 +330,7 @@ class NuScenesMixOccupancyDataset(Dataset):
         y = random.randint(0, shape[1] - 1)
         z = random.randint(0, shape[2] - 1)
         voxel[:, x:, y:, z:] = (voxel[:, x:, y:, z:] + other[:, x:, y:, z:]) / 2
-        voxel = MemmapTensor.from_tensor(voxel).as_tensor()
+        voxel = MemoryMappedTensor.from_tensor(voxel)
         return voxel
 
 
