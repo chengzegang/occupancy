@@ -164,5 +164,6 @@ models/*
 *.out
 wandb/
 !models/autoencoderkl-*
+!models/occ_transformer-*
 *.obj
 *.glb
