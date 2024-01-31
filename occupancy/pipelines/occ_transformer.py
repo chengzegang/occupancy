@@ -430,7 +430,7 @@ class OccupancyTransformerPipeline(nn.Module):
                 weight=pos_weight.type_as(pred_occ),
                 ignore_index=1,
             )
-        loss = loss + 0.001 * kl_loss
+        loss = loss + 0.0001 * kl_loss
         return OccupancyTransformerPipelineOutput(
             pred_occ,
             input.occupancy,
