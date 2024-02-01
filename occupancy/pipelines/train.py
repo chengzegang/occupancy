@@ -245,7 +245,7 @@ def train(
             betas=(0.9, 0.996),
             eps=1e-8,
         )
-    total_steps = args.total_epochs * len(dl) // args.grad_accum
+    total_steps = 2 * len(dl) // args.grad_accum
     scheduler = CosineWarmupLR(optimizer, args.warmup_steps, total_steps)
     args.model_name = f"{args.model}-cls{args.num_classes}"
     with wandb.init(
@@ -264,8 +264,9 @@ def train(
                 model_input = model_input_cls(batch, dtype=args.dtype, device=args.device)
 
                 def forward():
-                    output = model(model_input)
-                    mean_loss = output.loss.mean()
+                    with torch.autocast('cuda', torch.bfloat16):
+                        output = model(model_input)
+                        mean_loss = output.loss.mean()
                     (mean_loss / args.grad_accum).backward()
                     run.log({"loss": mean_loss.item()}, step=step)
                     return output, mean_loss
