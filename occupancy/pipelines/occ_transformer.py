@@ -410,7 +410,7 @@ class OccupancyTransformerPipeline(nn.Module):
                 occ = occ_shuffle(input.occupancy, 32, random.random() * 0.75)
                 occ_dist = self.voxel_autoencoderkl.encode(occ)
                 occ_latent = occ_dist.sample()
-                gt_sample =self.voxel_autoencoderkl.encode(input.occupancy).sample()
+                gt_sample = self.voxel_autoencoderkl.encode(input.occupancy).sample()
         model_output = self.decode(occ_latent, (16, 16, 2))
         latent_loss = F.mse_loss(model_output, gt_sample)
         pred_occ = self.voxel_autoencoderkl.decode(model_output)

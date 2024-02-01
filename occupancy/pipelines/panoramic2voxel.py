@@ -263,17 +263,33 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.hidden_size = 1024
         self.radius_channels = radius_channels
         self.patch_embeds = UnetEncoder2d(in_channels, self.hidden_size, self.hidden_size // (2**2), 2, 2)
-        self.encoder = Transformer(self.hidden_size * 2, 8, self.hidden_size * 2 // 128, 128)
-        self.occ_transformer = OccupancyTransformer(self.hidden_size, 12, self.hidden_size // 128, 128)
+        self.positional_embeds = nn.Embedding(16 * 16 * 2, self.hidden_size)
+        self.register_buffer("positional_ids", torch.arange(16 * 16 * 2).view(1, -1))
+        self.encoder = Transformer(self.hidden_size, 12, self.hidden_size // 128, 128)
+        self.linear1 = nn.Linear(self.hidden_size, self.hidden_size * 16)
+        self.linear2 = nn.Linear(self.hidden_size, self.hidden_size)
+        self.decoder = ConditionalTransformer(self.hidden_size, 12, self.hidden_size // 128, 128)
+        self.occ_norm = RMSNorm(self.hidden_size)
+        self.nonlinear = nn.SiLU(True)
+        self.occ_proj = nn.Linear(self.hidden_size, 64)
+        self.occ_transformer = OccupancyTransformer(64, 1024, 12)
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
         multiview = torch.cat(multiview.unbind(1), dim=-1)
         multiview_latent = self.patch_embeds(multiview)
-        multiview_latent = self.encoder(multiview_latent)
-        multiview_latent = multiview_latent.view(
-            multiview_latent.shape[0], self.hidden_size, 2, *multiview_latent.shape[-2:]
-        )
-        occ_latent = ops.view_as_cartesian(multiview_latent, out_shape, mode="bilinear")
+        shape = multiview_latent.shape[-2:]
+        pos_embeds = self.positional_embeds(self.positional_ids).expand(multiview_latent.shape[0], -1, -1)
+        multiview_latent = self.encoder(multiview_latent.flatten(2).transpose(1, 2))
+        occ_latent = self.linear1(multiview_latent)
+        occ_latent = occ_latent.view(occ_latent.shape[0], self.hidden_size, -1, *shape)
+        occ_latent = ops.view_as_cartesian(occ_latent, out_shape, mode="bilinear")
+        occ_latent = occ_latent.flatten(2).transpose(1, 2) + pos_embeds
+        multiview_feature = self.linear2(multiview_latent)
+        occ_latent = self.decoder(occ_latent, multiview_feature)
+        occ_latent = self.occ_norm(occ_latent)
+        occ_latent = self.nonlinear(occ_latent)
+        occ_latent = self.occ_proj(occ_latent)
+        occ_latent = occ_latent.transpose(1, 2).view(occ_latent.shape[0], -1, *out_shape)
         occ_latent = self.occ_transformer(occ_latent)
         return occ_latent
 
@@ -445,7 +461,6 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             label = voxel.argmax(dim=1)
             population = torch.bincount(label.flatten(), minlength=18).float()
             weight = torch.pow(torch.numel(label) / population * 4 * math.pi / 3, 1 / 3)
-            weight[0] = weight[0] / 4
             return weight
 
 
