@@ -263,17 +263,18 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.hidden_size = 1024
         self.radius_channels = radius_channels
         self.patch_embeds = UnetEncoder2d(in_channels, self.hidden_size, self.hidden_size // (2**2), 2, 2)
-        self.encoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128)
-        self.occ_transformer = OccupancyTransformer(self.hidden_size, 16, self.hidden_size // 128, 128)
+        self.encoder = Transformer(self.hidden_size * 2, 8, self.hidden_size * 2 // 128, 128)
+        self.occ_transformer = OccupancyTransformer(self.hidden_size, 12, self.hidden_size // 128, 128)
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
         multiview = torch.cat(multiview.unbind(1), dim=-1)
         multiview_latent = self.patch_embeds(multiview)
         multiview_latent = self.encoder(multiview_latent)
-        occ_latent = ops.view_as_cartesian(multiview_latent, out_shape)
-        occ_dist = self.occ_transformer(occ_latent)
-        occ_dist = GaussianDistribution.from_latent(occ_dist, latent_scale=0.1)
-        occ_latent = occ_dist.sample()
+        multiview_latent = multiview_latent.view(
+            multiview_latent.shape[0], self.hidden_size, 2, *multiview_latent.shape[-2:]
+        )
+        occ_latent = ops.view_as_cartesian(multiview_latent, out_shape, mode="bilinear")
+        occ_latent = self.occ_transformer(occ_latent)
         return occ_latent
 
 
