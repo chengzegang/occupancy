@@ -407,7 +407,7 @@ class OccupancyTransformerPipeline(nn.Module):
         if self.training:
             occ_latent = None
             with torch.no_grad():
-                occ = occ_shuffle(input.occupancy, 32, random.random() * 0.75)
+                occ = occ_shuffle(input.occupancy, 32, random.random())
                 occ_dist = self.voxel_autoencoderkl.encode(occ)
                 occ_latent = occ_dist.sample()
                 gt_sample = self.voxel_autoencoderkl.encode(input.occupancy).sample()
