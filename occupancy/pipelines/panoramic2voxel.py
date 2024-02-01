@@ -130,21 +130,21 @@ class MultiViewImageToVoxelPipelineOutput:
 
     _CMAP = np.asarray(
         [  # RGB.
-            (np.nan, np.nan, np.nan),  # None
-            (0, 0, 0),  # Black. noise
-            (112, 128, 144),  # Slategrey barrier
-            (220, 20, 60),  # Crimson bicycle
-            (255, 127, 80),  # Orangered bus
-            (255, 158, 0),  # Orange car
-            (233, 150, 70),  # Darksalmon construction
-            (255, 61, 99),  # Red motorcycle
-            (0, 0, 230),  # Blue pedestrian
-            (47, 79, 79),  # Darkslategrey trafficcone
-            (255, 140, 0),  # Darkorange trailer
-            (255, 99, 71),  # Tomato truck
-            (0, 207, 191),  # nuTonomy green driveable_surface
-            (175, 0, 75),  # flat other
-            (75, 0, 75),  # sidewalk
+            (np.nan, np.nan, np.nan),  # None 0
+            (0, 0, 0),  # Black. noise 1
+            (112, 128, 144),  # Slategrey barrier 2
+            (220, 20, 60),  # Crimson bicycle 3
+            (255, 127, 80),  # Orangered bus 4
+            (255, 158, 0),  # Orange car 5
+            (233, 150, 70),  # Darksalmon construction 6
+            (255, 61, 99),  # Red motorcycle 7
+            (0, 0, 230),  # Blue pedestrian 8
+            (47, 79, 79),  # Darkslategrey trafficcone 9
+            (255, 140, 0),  # Darkorange trailer 10
+            (255, 99, 71),  # Tomato truck 11
+            (0, 207, 191),  # nuTonomy green driveable_surface 12
+            (175, 0, 75),  # flat other 13
+            (75, 0, 75),  # sidewalk 14
             (112, 180, 60),  # terrain
             (222, 184, 135),  # Burlywood mannade
             (0, 175, 0),  # Green vegetation
@@ -262,34 +262,24 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.in_channels = in_channels
         self.hidden_size = 1024
         self.radius_channels = radius_channels
-        self.patch_embeds = UnetEncoder2d(in_channels, self.hidden_size, self.hidden_size // (2**2), 2, 2)
+        self.patch_embeds = nn.Conv2d(in_channels, self.hidden_size, 8, stride=8)
         self.positional_embeds = nn.Embedding(16 * 16 * 2, self.hidden_size)
         self.register_buffer("positional_ids", torch.arange(16 * 16 * 2).view(1, -1))
-        self.encoder = Transformer(self.hidden_size, 12, self.hidden_size // 128, 128)
-        self.linear1 = nn.Linear(self.hidden_size, self.hidden_size * 16)
-        self.linear2 = nn.Linear(self.hidden_size, self.hidden_size)
-        self.decoder = ConditionalTransformer(self.hidden_size, 12, self.hidden_size // 128, 128)
-        self.occ_norm = RMSNorm(self.hidden_size)
+        self.decoder = ConditionalTransformer(self.hidden_size, 16, self.hidden_size // 128, 128, max_seq_length=1024)
+        self.occ_norm = SpatialRMSNorm(self.hidden_size)
         self.nonlinear = nn.SiLU(True)
-        self.occ_proj = nn.Linear(self.hidden_size, 64)
+        self.occ_proj = nn.Conv3d(self.hidden_size, 64, 1)
         self.occ_transformer = OccupancyTransformer(64, 1024, 12)
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
         multiview = torch.cat(multiview.unbind(1), dim=-1)
-        multiview_latent = self.patch_embeds(multiview)
-        shape = multiview_latent.shape[-2:]
-        pos_embeds = self.positional_embeds(self.positional_ids).expand(multiview_latent.shape[0], -1, -1)
-        multiview_latent = self.encoder(multiview_latent.flatten(2).transpose(1, 2))
-        occ_latent = self.linear1(multiview_latent)
-        occ_latent = occ_latent.view(occ_latent.shape[0], self.hidden_size, -1, *shape)
-        occ_latent = ops.view_as_cartesian(occ_latent, out_shape, mode="bilinear")
-        occ_latent = occ_latent.flatten(2).transpose(1, 2) + pos_embeds
-        multiview_feature = self.linear2(multiview_latent)
-        occ_latent = self.decoder(occ_latent, multiview_feature)
+        pos_embeds = self.positional_embeds(self.positional_ids).expand(multiview.shape[0], -1, -1)
+        multiview_latent = self.patch_embeds(multiview).flatten(2).transpose(1, 2)
+        occ_latent = self.decoder(pos_embeds, multiview_latent)
+        occ_latent = occ_latent.transpose(1, 2).view(occ_latent.shape[0], -1, *out_shape)
         occ_latent = self.occ_norm(occ_latent)
         occ_latent = self.nonlinear(occ_latent)
         occ_latent = self.occ_proj(occ_latent)
-        occ_latent = occ_latent.transpose(1, 2).view(occ_latent.shape[0], -1, *out_shape)
         occ_latent = self.occ_transformer(occ_latent)
         return occ_latent
 

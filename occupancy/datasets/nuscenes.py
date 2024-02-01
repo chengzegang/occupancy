@@ -166,6 +166,18 @@ class NuScenesPointCloud:
     @classmethod
     def _load_full_size_occupancy(cls, path: str, binary: bool = True, rotate: Optional[Tensor] = None) -> Tensor:
         points = torch.from_numpy(np.load(path)).t()
+        is_flat = points[3] == 11
+        ind = torch.where(is_flat)[0]
+        other_ind = torch.where(~is_flat)[0]
+        sample_ind = ind[torch.randperm(ind.shape[0])[: int(ind.shape[0] * 0.5)]]  # type: ignore
+        total_ind = torch.cat([sample_ind, other_ind])
+        points = points[:, total_ind]
+        # norm_p = points[[2, 1, 0]].float()
+        # norm_p[0] = (norm_p[0] - 256) / 256
+        # norm_p[1] = (norm_p[1] - 256) / 256
+        # norm_p[2] = (norm_p[2] - 20) / 20
+        # final_ind = ops.filter_observable(norm_p, 0.3, 0.3)
+        # points = points[:, final_ind]
         if rotate is not None:
             xyz = points[[2, 1, 0]].clone()
             xyz[0] = xyz[0] - 256
