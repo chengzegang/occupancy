@@ -77,7 +77,7 @@ class ImageAugmentation(nn.Module):
         )
 
     def forward(self, x: Tensor) -> Tensor:
-        with torch.autocast('cuda', torch.float32):
+        with torch.autocast("cuda", torch.float32):
             return self.transform(x)
 
 
@@ -410,19 +410,22 @@ class MultiViewImageToVoxelPipeline(nn.Module):
                 input.images.data = self.image_augmentation(input.images.data.float()).type_as(input.images.data)
         model_output = self.decode(input.images, (16, 16, 2))
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
-        pos_weight = self.influence_radial_weight(input.occupancy)
+        tgt_occ = input.occupancy
+        rmask = torch.rand_like(tgt_occ) < 0.1
+        tgt_occ[rmask] = False
+        pos_weight = self.influence_radial_weight(tgt_occ)
         loss = None
-        if input.occupancy.shape[1] == 1:
+        if tgt_occ.shape[1] == 1:
             loss = F.binary_cross_entropy_with_logits(
                 pred_occ,
-                input.occupancy,
+                tgt_occ,
                 pos_weight=torch.tensor(3.2, device=pred_occ.device, dtype=pred_occ.dtype),
                 reduction="none",
             )
         else:
             loss = F.cross_entropy(
                 pred_occ,
-                input.occupancy.argmax(dim=1),
+                tgt_occ.argmax(dim=1),
                 reduction="none",
                 weight=pos_weight.type_as(pred_occ),
                 ignore_index=1,
