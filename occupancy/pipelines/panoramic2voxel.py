@@ -263,27 +263,43 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.in_channels = in_channels
         self.hidden_size = 1024
         self.radius_channels = radius_channels
-        self.patch_embeds = nn.Conv2d(in_channels, self.hidden_size, 8, stride=8)
-        self.positional_embeds = nn.Embedding(16 * 16 * 2, self.hidden_size)
-        self.register_buffer("positional_ids", torch.arange(16 * 16 * 2).view(1, -1))
-        self.encoder = Transformer(self.hidden_size, 16, self.hidden_size // 128, 128, max_seq_length=1024)
-        self.decoder = ConditionalTransformer(self.hidden_size, 16, self.hidden_size // 128, 128, max_seq_length=1024)
-        self.occ_norm = SpatialRMSNorm(self.hidden_size)
+        self.patch_conv = nn.Conv2d(in_channels, self.hidden_size, 4, stride=4)
+
+        self.positional_embeds = nn.Embedding(10000, self.hidden_size)
+        self.register_buffer("positional_ids", torch.arange(10000).view(1, -1).long())
+        self.p_encoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128, max_seq_length=10000)
+        self.k_encoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128, max_seq_length=10000)
+        self.v_encoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128, max_seq_length=10000)
+        self.decoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128, max_seq_length=10000)
+        self.occ_norm = RMSNorm(self.hidden_size)
         self.nonlinear = nn.SiLU(True)
-        self.occ_proj = nn.Conv3d(self.hidden_size, 64, 1)
+        self.occ_proj = nn.Linear(self.hidden_size, 64)
         self.occ_transformer = OccupancyTransformer(64, 1024, 12)
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
         multiview = torch.cat(multiview.unbind(1), dim=-1)
-        pos_embeds = self.positional_embeds(self.positional_ids).expand(multiview.shape[0], -1, -1)
-        multiview_latent = self.patch_embeds(multiview).flatten(2).transpose(1, 2)
-        multiview_latent = self.encoder(multiview_latent)
-        occ_latent = self.decoder(pos_embeds, multiview_latent)
-        occ_latent = occ_latent.transpose(1, 2).view(occ_latent.shape[0], -1, *out_shape)
+        seq_len = out_shape[0] * out_shape[1] * out_shape[2]
+        q = self.positional_embeds(self.positional_ids[:, :seq_len])
+
+        q = q.expand(multiview.shape[0], -1, -1)
+
+        kv_embeds = self.patch_conv(multiview).flatten(2).transpose(1, 2)
+        pkv_embeds = self.p_encoder(kv_embeds)
+        k = self.k_encoder(pkv_embeds)
+        v = self.v_encoder(pkv_embeds)
+
+        q = q.view(q.shape[0], q.shape[1], -1, 128).transpose(1, 2)
+        k = k.view(k.shape[0], k.shape[1], -1, 128).transpose(1, 2)
+        v = v.view(v.shape[0], v.shape[1], -1, 128).transpose(1, 2)
+
+        out = F.scaled_dot_product_attention(q, k, v)
+        out = out.transpose(1, 2).flatten(2)
+        occ_latent = self.decoder(out)
+
         occ_latent = self.occ_norm(occ_latent)
         occ_latent = self.nonlinear(occ_latent)
         occ_latent = self.occ_proj(occ_latent)
-        occ_latent = self.occ_transformer(occ_latent)
+        occ_latent = self.occ_transformer(occ_latent.transpose(1, 2).reshape(out.shape[0], -1, *out_shape))
         return occ_latent
 
 
@@ -411,7 +427,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
                 input.images.data = input.images.data[:, torch.randperm(input.images.shape[1])]
         model_output = self.decode(input.images, (16, 16, 2))
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
-        tgt_occ = input.occupancy
+        tgt_occ = input.occupancy.clone()
         rmask = torch.rand_like(tgt_occ) < 0.1
         tgt_occ[rmask] = False
         pos_weight = self.influence_radial_weight(input.occupancy)
