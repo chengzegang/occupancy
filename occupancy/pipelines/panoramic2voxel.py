@@ -77,7 +77,8 @@ class ImageAugmentation(nn.Module):
         )
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.transform(x)
+        with torch.autocast('cuda', torch.float32):
+            return self.transform(x)
 
 
 class MultiViewImageToVoxelPipelineInput:
