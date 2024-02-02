@@ -444,7 +444,11 @@ class MultiViewImageToVoxelPipeline(nn.Module):
                 weight=pos_weight.type_as(pred_occ),
                 ignore_index=1,
             )
-        loss = loss + latent_loss
+        occ = input.occupancy.argmax(dim=1) > 0
+        num_occ = torch.sum(occ)
+        num_non_occ = torch.numel(occ) - num_occ
+        ratio = num_occ / num_non_occ
+        loss = 100 * ratio * (loss + latent_loss)
         return MultiViewImageToVoxelPipelineOutput(
             pred_occ,
             input.occupancy,
