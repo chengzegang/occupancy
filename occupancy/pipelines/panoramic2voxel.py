@@ -265,7 +265,7 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.in_channels = in_channels
         self.hidden_size = 768
         self.radius_channels = radius_channels
-        self.positional_embeds = nn.Embedding(10000, self.hidden_size, scale_grad_by_freq=True)
+        self.positional_embeds = nn.Embedding(10000, self.hidden_size)
         self.register_buffer("positional_ids", torch.arange(10000).view(1, -1).long())
         self.p_encoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128, max_seq_length=10000)
         self.k_encoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128, max_seq_length=10000)
@@ -344,9 +344,6 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             4,
         )
         self.image_augmentation = ImageAugmentation()
-        # self.image_autoencoderkl = AutoencoderKL.from_pretrained(
-        #    image_autoencoderkl_model_id, torch_dtype=torch.bfloat16, torchscript=True, device_map="auto"
-        # )
 
         self.image_feature = torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14")
 
@@ -356,7 +353,6 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             self.plane2polar_depth_channels,
         )
         self.voxel_autoencoderkl.requires_grad_(False)
-        # self.image_autoencoderkl.requires_grad_(False)
 
     def decode(self, images, voxel_shape) -> Tensor:
         B, V, C, H, W = images.shape
@@ -397,7 +393,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         pos_weight = self.influence_radial_weight(input.occupancy)
         latent_loss = F.mse_loss(model_output, gt_occ)
         loss = None
-        roi = occ_approx_roi(input.occupancy)
+        # roi = occ_approx_roi(input.occupancy)
         if input.occupancy.shape[1] == 1:
             loss = F.binary_cross_entropy_with_logits(
                 pred_occ,
@@ -413,7 +409,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
                 ignore_index=1,
                 reduction="none",
             )
-        loss = loss * roi
+        # loss = loss * roi
         loss = loss.mean()
         loss = loss + latent_loss
         return MultiViewImageToVoxelPipelineOutput(
@@ -456,7 +452,7 @@ def config_model(args):
 
     else:
         model = MultiViewImageToVoxelPipeline(num_classes=args.num_classes)
-        # model.image_autoencoderkl.save_pretrained(image_autoencoderkl_model_id)
+
     try:
         path = os.path.join(args.save_dir, f"{args.model}-cls{args.num_classes}.pt")
         model.load_state_dict(
