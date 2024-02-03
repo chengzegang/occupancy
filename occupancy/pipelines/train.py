@@ -13,7 +13,7 @@ import wandb
 from torch import Tensor, nn
 from torch.distributed.optim import ZeroRedundancyOptimizer as ZeRO
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim import AdamW
+from torch.optim import AdamW, Adamax, Adam, SGD, RMSprop, RAdam
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import threading
@@ -233,7 +233,7 @@ def train(
             AdamW,
             lr=args.lr,
             weight_decay=args.weight_decay,
-            betas=(0.9, 0.996),
+            betas=(0.9, 0.96),
             eps=1e-8,
             parameters_as_bucket_view=True,
         )
@@ -242,8 +242,9 @@ def train(
             model.parameters(),
             lr=args.lr,
             weight_decay=args.weight_decay,
-            betas=(0.9, 0.996),
+            betas=(0.9, 0.96),
             eps=1e-8,
+            fused=True,
         )
     total_steps = 2 * len(dl) // args.grad_accum
     scheduler = CosineWarmupLR(optimizer, args.warmup_steps, total_steps)
@@ -264,7 +265,7 @@ def train(
                 model_input = model_input_cls(batch, dtype=args.dtype, device=args.device)
 
                 def forward():
-                    with torch.autocast('cuda', torch.bfloat16):
+                    with torch.autocast("cuda", torch.bfloat16):
                         output = model(model_input)
                         mean_loss = output.loss.mean()
                     (mean_loss / args.grad_accum).backward()
