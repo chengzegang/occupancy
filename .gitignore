@@ -169,3 +169,4 @@ wandb/
 *.glb
 data/
 *.png
+.torch/

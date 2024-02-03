@@ -344,8 +344,10 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             4,
         )
         self.image_augmentation = ImageAugmentation()
-
-        self.image_feature = torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14", trust_repo=True, skip_validation=True)
+        torch.hub.set_dir(os.path.join(os.curdir, ".torch"))
+        self.image_feature = torch.hub.load(
+            "facebookresearch/dinov2", "dinov2_vitb14", trust_repo=True, skip_validation=True
+        )
 
         self.decoder = MultiViewImageToVoxelModel(
             4,
