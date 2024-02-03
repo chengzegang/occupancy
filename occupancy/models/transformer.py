@@ -16,7 +16,7 @@ def fused_rmsnorm(x: Tensor, weight: Tensor, bias: Tensor, eps: float = 1e-5) ->
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, hidden_size: int, eps: float = 1e-5):
+    def __init__(self, hidden_size: int, eps: float = 1e-8):
         super().__init__()
         self.hidden_size = hidden_size
         self.eps = eps
