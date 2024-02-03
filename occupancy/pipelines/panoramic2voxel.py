@@ -268,8 +268,8 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.positional_embeds = nn.Embedding(10000, self.hidden_size)
         self.register_buffer("positional_ids", torch.arange(10000).view(1, -1).long())
         self.kv_linear_in = nn.Linear(self.hidden_size, self.hidden_size * 2)
-        self.kv_encoder = Transformer(self.hidden_size * 2, 8, self.hidden_size * 2 // 128, 128, max_seq_length=10000)
-        self.decoder = Transformer(self.hidden_size, 6, self.hidden_size // 128, 128, max_seq_length=10000)
+        self.kv_encoder = Transformer(self.hidden_size * 2, 8, self.hidden_size * 2 // 64, 64, max_seq_length=10000)
+        self.decoder = Transformer(self.hidden_size, 6, self.hidden_size // 64, 64, max_seq_length=10000)
         self.occ_norm = RMSNorm(self.hidden_size)
         self.nonlinear = nn.SiLU(True)
         self.occ_proj = nn.Linear(self.hidden_size, 64)
@@ -286,7 +286,7 @@ class MultiViewImageToVoxelModel(nn.Module):
         k = k.view(k.shape[0], k.shape[1], -1, 128).transpose(1, 2)
         v = v.view(v.shape[0], v.shape[1], -1, 128).transpose(1, 2)
 
-        out = F.scaled_dot_product_attention(q, k, v, scale=1)
+        out = F.scaled_dot_product_attention(q, k, v)
         out = out.transpose(1, 2).flatten(2)
         occ_latent = self.decoder(out)
 
