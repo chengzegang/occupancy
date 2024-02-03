@@ -220,7 +220,8 @@ def train(
         torch.cuda.set_device(args.local_rank)
     model, model_input_cls = config_model(args)
     total_params = count_parameters(model)
-    logging.info(f"[rank {local_rank}] total params: {total_params}")
+    if local_rank == 0:
+        print(f"[rank {local_rank}] total params: {total_params}")
     ema_model = None
     if args.ema:
         ema_model = swa_utils.AveragedModel(model, avg_fn=swa_utils.get_ema_avg_fn(0.9), use_buffers=True)
@@ -280,7 +281,7 @@ def train(
                         output, mean_loss = forward()
                 else:
                     output, mean_loss = forward()
-                    nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    nn.utils.clip_grad_norm_(model.parameters(), 1.0, foreach=True)
                     optimizer.step()
                     if ema_model is not None:
                         ema_model.update_parameters(model)

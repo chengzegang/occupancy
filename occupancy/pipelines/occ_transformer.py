@@ -316,7 +316,7 @@ class OccupancyTransformerPipeline(nn.Module):
         self.image_autoencoderkl = AutoencoderKL.from_pretrained(
             image_autoencoderkl_model_id, torch_dtype=torch.bfloat16, torchscript=True, device_map="auto"
         )
-
+        self.image_patch_conv = nn.Conv2d(3, 768, 14, stride=14)
         self.decoder = OccupancyTransformer(
             self.voxel_encoder_latent_dim,
             1024,

@@ -267,10 +267,10 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.radius_channels = radius_channels
         self.positional_embeds = nn.Embedding(10000, self.hidden_size)
         self.register_buffer("positional_ids", torch.arange(10000).view(1, -1).long())
-        self.p_encoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128, max_seq_length=10000)
-        self.k_encoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128, max_seq_length=10000)
-        self.v_encoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128, max_seq_length=10000)
-        self.decoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128, max_seq_length=10000)
+        self.p_encoder = Transformer(self.hidden_size, 6, self.hidden_size // 128, 128, max_seq_length=10000)
+        self.k_encoder = Transformer(self.hidden_size, 6, self.hidden_size // 128, 128, max_seq_length=10000)
+        self.v_encoder = Transformer(self.hidden_size, 6, self.hidden_size // 128, 128, max_seq_length=10000)
+        self.decoder = Transformer(self.hidden_size, 6, self.hidden_size // 128, 128, max_seq_length=10000)
         self.occ_norm = RMSNorm(self.hidden_size)
         self.nonlinear = nn.SiLU(True)
         self.occ_proj = nn.Linear(self.hidden_size, 64)
@@ -324,6 +324,25 @@ def occ_approx_roi(occ: Tensor) -> Tensor:
     return mask
 
 
+class Bypass(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, patch_size: int):
+        super().__init__()
+        self.patch_embed = nn.Conv2d(in_channels, out_channels, patch_size, patch_size)
+        self.patch_norm = nn.LayerNorm(out_channels)
+        self.zero_head = nn.Linear(out_channels, out_channels)
+        self.nonlinear = nn.SiLU(True)
+
+        self.zero_head.weight.data.zero_()
+        self.zero_head.bias.data.zero_()
+
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.patch_embed(x).flatten(2).transpose(-1, -2)
+        x = self.patch_norm(x)
+        x = self.nonlinear(x)
+        x = self.zero_head(x)
+        return x
+
+
 class MultiViewImageToVoxelPipeline(nn.Module):
     def __init__(
         self,
@@ -348,6 +367,8 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         self.image_feature = torch.hub.load(
             "facebookresearch/dinov2", "dinov2_vitb14", trust_repo=True, skip_validation=True
         )
+
+        self.bypass = Bypass(3, 768, 14)
 
         self.decoder = MultiViewImageToVoxelModel(
             4,
@@ -374,12 +395,15 @@ class MultiViewImageToVoxelPipeline(nn.Module):
                 [self.image_feature.forward_features(chk)["x_norm_patchtokens"] for chk in chunks], dim=0
             )
             features = features.reshape(B, -1, features.shape[-1])
+        patches: Tensor = torch.cat([self.bypass(chk) for chk in chunks], dim=0)
+        patches = patches.reshape(B, -1, patches.shape[-1])
+        features = features + patches
 
         multiview_latent = self.decoder(features, voxel_shape)
         return multiview_latent
 
     def parameters(self, recurse: bool = True) -> Iterator[Parameter]:
-        return self.decoder.parameters(recurse)
+        return chain(self.decoder.parameters(recurse), self.bypass.parameters(recurse))
 
     def __call__(self, input: MultiViewImageToVoxelPipelineInput) -> MultiViewImageToVoxelPipelineOutput:
         return super().__call__(input)
