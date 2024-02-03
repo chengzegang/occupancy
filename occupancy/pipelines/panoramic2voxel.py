@@ -52,6 +52,7 @@ from torch.utils.data import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.optim import ZeroRedundancyOptimizer as ZeRO
 import warnings
+import torchvision.transforms.v2.functional as TF
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -277,14 +278,14 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.occ_transformer = OccupancyTransformer(64, 1024, 12)
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
-        multiview = torch.cat(multiview.unbind(1), dim=-1)
+        # multiview = torch.cat(multiview.unbind(1), dim=-1)
         seq_len = out_shape[0] * out_shape[1] * out_shape[2]
         q = self.positional_embeds(self.positional_ids[:, :seq_len])
 
         q = q.expand(multiview.shape[0], -1, -1)
 
-        kv_embeds = self.patch_conv(multiview).flatten(2).transpose(1, 2)
-        pkv_embeds = self.p_encoder(kv_embeds)
+        # kv_embeds = self.patch_conv(multiview).flatten(2).transpose(1, 2)
+        pkv_embeds = self.p_encoder(multiview)
         k = self.k_encoder(pkv_embeds)
         v = self.v_encoder(pkv_embeds)
 
@@ -326,6 +327,10 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         self.image_autoencoderkl = AutoencoderKL.from_pretrained(
             image_autoencoderkl_model_id, torch_dtype=torch.bfloat16, torchscript=True, device_map="auto"
         )
+        from torchvision import models
+        from transformers import CLIPVisionModel
+
+        self.image_feature = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14")
 
         self.decoder = MultiViewImageToVoxelModel(
             4,
@@ -334,91 +339,28 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         )
         self.voxel_autoencoderkl.requires_grad_(False)
         self.image_autoencoderkl.requires_grad_(False)
-        self._vae_slicing = False
-
-    def enable_vae_slicing(self, enabled: bool = True):
-        self._vae_slicing = enabled
-
-    def prepare_image(self, images: Tensor) -> Tensor:
-        if not self._vae_slicing:
-            return self.image_autoencoderkl.encode(images).latent_dist.sample()
-        image_chunks = torch.split(images, 512, dim=-1)
-        image_chunks = [torch.split(chunk, 512, dim=-2) for chunk in image_chunks]
-        image_sample = []
-        for i, chunks in enumerate(image_chunks):
-            image_sample.append([])
-            for j, chk in enumerate(chunks):
-                chk = self.image_autoencoderkl.encode(chk).latent_dist.sample()
-                image_sample[i].append(chk)
-        image_sample = torch.cat([torch.cat(chk, dim=-2) for chk in image_sample], dim=-1)
-        return image_sample.detach()
 
     def decode(self, images, voxel_shape) -> Tensor:
         batch_size = images.shape[0]
         num_images = images.shape[1]
         with torch.no_grad():
-            multiview_sample = self.prepare_image(images.flatten(0, 1))
+            images = images.flatten(0, 1)
+            images = F.interpolate(images, (224, 224), mode="bicubic", antialias=True)
+            images = TF.normalize(images, [0.48145466, 0.4578275, 0.40821073], [0.26862954, 0.26130258, 0.27577711])
+            chunks = []
+            for i in range(2):
+                for j in range(2):
+                    ck = images[:, :, i * 224 : (i + 1) * 224, j * 224 : (j + 1) * 224]
+                    chunks.append(self.image_feature(ck).last_hidden_state[:, 1:])
+            chunks = torch.cat(chunks, dim=1)
+            # multiview_sample = self.image_feature(images).last_hidden_state[:, 1:]
+            multiview_sample = chunks.view(batch_size, num_images, *chunks.shape[1:]).flatten(1, 2)
 
-        multiview_latent = self.decoder(
-            multiview_sample.view(batch_size, num_images, *multiview_sample.shape[1:]), voxel_shape
-        )
+        multiview_latent = self.decoder(multiview_sample, voxel_shape)
         return multiview_latent
 
     def __call__(self, input: MultiViewImageToVoxelPipelineInput) -> MultiViewImageToVoxelPipelineOutput:
         return super().__call__(input)
-
-    def prepare_latent_dist(self, voxel: Tensor) -> GaussianDistribution:
-        voxel_chunks = torch.split(voxel, 256, dim=-2)
-        voxel_chunks = [torch.split(chunk, 256, dim=-3) for chunk in voxel_chunks]
-        voxel_dist = torch.zeros(
-            voxel.shape[0],
-            32,
-            len(voxel_chunks[0]) * 32,
-            len(voxel_chunks) * 32,
-            8,
-            device=voxel.device,
-            dtype=voxel.dtype,
-        )
-        for i, chunk in enumerate(voxel_chunks):
-            for j, chk in enumerate(chunk):
-                chk = self.voxel_autoencoderkl.encode_latent(chk)
-                voxel_dist[:, :, j * 32 : (j + 1) * 32, i * 32 : (i + 1) * 32].copy_(chk, non_blocking=True)
-        voxel_dist = GaussianDistribution.from_latent(
-            voxel_dist.detach(), latent_scale=self.voxel_autoencoderkl.latent_scale
-        )
-        return voxel_dist
-
-    def decode_latent_sample(self, latent_sample: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
-        sample = torch.zeros(
-            latent_sample.shape[0],
-            self.num_classes,
-            *out_shape,
-            device=latent_sample.device,
-            dtype=latent_sample.dtype,
-        )
-        if not self._vae_slicing:
-            sample = self.voxel_autoencoderkl.decode(latent_sample)
-        else:
-            latent_chunks = torch.split(latent_sample, 32, dim=-2)
-            latent_chunks = [torch.split(chunk, 32, dim=-3) for chunk in latent_chunks]
-            for i, chunk in enumerate(latent_chunks):
-                for j, chk in enumerate(chunk):
-                    chk = self.voxel_autoencoderkl.decode(chk)
-                    sample[:, :, j * 256 : (j + 1) * 256, i * 256 : (i + 1) * 256].copy_(chk, non_blocking=True)
-
-        return sample
-
-    def random_sample_voxel(self, model_output: Tensor, voxel: Tensor) -> Tensor:
-        i = random.randint(0, 32)
-        j = random.randint(0, 32)
-        x = i * 8
-        y = j * 8
-        model_output = model_output[:, :, i : i + 32, j : j + 32]
-        pred_voxel = self.voxel_autoencoderkl.decode(model_output)
-        voxel = voxel[:, :, x : x + 256, y : y + 256]
-        pos_weight = self.influence_radial_weight(voxel)
-        loss = F.binary_cross_entropy_with_logits(pred_voxel, voxel, reduction="none", pos_weight=pos_weight)
-        return loss, pos_weight
 
     def forward(self, input: MultiViewImageToVoxelPipelineInput) -> MultiViewImageToVoxelPipelineOutput:
         if self.training:
@@ -524,6 +466,7 @@ def config_model(args):
     model.voxel_autoencoderkl.requires_grad_(False)
     model.image_autoencoderkl.requires_grad_(False)
     model.decoder.occ_transformer.requires_grad_(False)
+    model.image_feature.requires_grad_(False)
     return model, MultiViewImageToVoxelPipelineInput.from_nuscenes_dataset_item
 
 
