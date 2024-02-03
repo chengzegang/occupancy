@@ -345,7 +345,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         num_images = images.shape[1]
         with torch.no_grad():
             images = images.flatten(0, 1)
-            images = F.interpolate(images, (224, 224), mode="bicubic", antialias=True)
+            images = F.interpolate(images, (448, 448), mode="bicubic", antialias=True)
             images = TF.normalize(images, [0.48145466, 0.4578275, 0.40821073], [0.26862954, 0.26130258, 0.27577711])
             chunks = []
             for i in range(2):
