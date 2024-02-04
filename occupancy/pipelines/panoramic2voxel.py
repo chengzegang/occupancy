@@ -411,11 +411,11 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             with torch.no_grad():
                 input.images.data = self.image_augmentation(input.images.data.float()).type_as(input.images.data)
                 input.images.data = input.images.data[:, torch.randperm(input.images.shape[1])]
-                gt_occ = self.voxel_autoencoderkl.encode(input.occupancy).sample()
+                # gt_occ = self.voxel_autoencoderkl.encode(input.occupancy).sample()
         model_output = self.decode(input.images, (16, 16, 2))
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
         pos_weight = self.influence_radial_weight(input.occupancy)
-        latent_loss = F.mse_loss(model_output, gt_occ)
+        # latent_loss = F.mse_loss(model_output, gt_occ)
         loss = None
         # roi = occ_approx_roi(input.occupancy)
         if input.occupancy.shape[1] == 1:
@@ -435,7 +435,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             )
         # loss = loss * roi
         loss = loss.mean()
-        loss = loss + latent_loss
+        loss = loss  # + latent_loss
         return MultiViewImageToVoxelPipelineOutput(
             pred_occ,
             input.occupancy,
