@@ -6,8 +6,8 @@
 #SBATCH --time=24:00:00
 #SBATCH --mem=128GB 
 #SBATCH --gres=gpu:a100:1
-#SBATCH --job-name=occ_pl
-#SBATCH --output=occ_pl.out
+#SBATCH --job-name=occ_pl2
+#SBATCH --output=occ_pl2.out
 
 singularity exec --nv \
 		--overlay /scratch/$USER/containers/overlay.ext3  \
