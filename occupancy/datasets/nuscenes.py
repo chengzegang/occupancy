@@ -164,7 +164,9 @@ class NuScenesPointCloud:
         return torch.from_numpy(np.load(file)["data"].astype(np.uint8))
 
     @classmethod
-    def _load_full_size_occupancy(cls, path: str, binary: bool = True, rotate: Optional[Tensor] = None) -> Tensor:
+    def _load_full_size_occupancy(
+        cls, path: str, binary: bool = True, rotate: Optional[Tensor] = None, observable: bool = True
+    ) -> Tensor:
         points = torch.from_numpy(np.load(path)).t()
         is_noise = points[3] == 0
         points = points[:, ~is_noise]
@@ -173,13 +175,15 @@ class NuScenesPointCloud:
         # other_ind = torch.where(~is_flat)[0]
         # sample_ind = ind[torch.randperm(ind.shape[0])[: int(ind.shape[0] * 0.5)]]  # type: ignore
         # total_ind = torch.cat([sample_ind, other_ind])
+
         # points = points[:, other_ind]
-        norm_p = points[[2, 1, 0]].float()
-        norm_p[0] = (norm_p[0] - 256) / 256
-        norm_p[1] = (norm_p[1] - 256) / 256
-        norm_p[2] = (norm_p[2] - 20) / 20
-        final_ind = ops.filter_observable(norm_p, 1, 1)
-        points = points[:, final_ind]
+        if observable:
+            norm_p = points[[2, 1, 0]].float()
+            norm_p[0] = (norm_p[0] - 256) / 256
+            norm_p[1] = (norm_p[1] - 256) / 256
+            norm_p[2] = (norm_p[2] - 20) / 20
+            final_ind = ops.filter_observable(norm_p, 1, 1)
+            points = points[:, final_ind]
         if rotate is not None:
             xyz = points[[2, 1, 0]].clone()
             xyz[0] = xyz[0] - 256
@@ -208,9 +212,14 @@ class NuScenesPointCloud:
 
     @classmethod
     def _load_occupancy(
-        cls, path: str, binary: bool = True, scale_factor: Optional[float] = None, rotate: Optional[Tensor] = None
+        cls,
+        path: str,
+        binary: bool = True,
+        scale_factor: Optional[float] = None,
+        rotate: Optional[Tensor] = None,
+        observable: bool = True,
     ) -> Tensor:
-        points, attrs, occ = cls._load_full_size_occupancy(path, binary, rotate)
+        points, attrs, occ = cls._load_full_size_occupancy(path, binary, rotate, observable)
         if scale_factor is not None and scale_factor != 1.0:
             if binary:
                 occ = F.interpolate(occ.float(), scale_factor=scale_factor, mode="trilinear", align_corners=True).bool()
@@ -321,7 +330,9 @@ class NuScenesOccupancyDataset(Dataset):
     def __getitem__(self, index: int):
         rot = R.from_euler("z", random.randint(0, 360), degrees=True).as_matrix()
         rot = torch.from_numpy(rot).to(torch.float32)
-        voxel = NuScenesPointCloud._load_occupancy(self._paths[index], self.binary, self.scale_factor, rot)[-1][0]
+        voxel = NuScenesPointCloud._load_occupancy(
+            self._paths[index], self.binary, self.scale_factor, rot, observable=False
+        )[-1][0]
         voxel = MemoryMappedTensor.from_tensor(voxel)
         return voxel
 

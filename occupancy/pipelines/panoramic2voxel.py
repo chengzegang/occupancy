@@ -272,7 +272,7 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.decoder = Transformer(self.hidden_size, 6, self.hidden_size // 64, 64, max_seq_length=10000)
         self.occ_norm = RMSNorm(self.hidden_size)
         self.nonlinear = nn.SiLU(True)
-        self.occ_proj = nn.Linear(self.hidden_size, 64)
+        self.occ_proj = nn.Linear(self.hidden_size, 4)
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
         seq_len = out_shape[0] * out_shape[1] * out_shape[2]
@@ -350,7 +350,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
     ):
         super().__init__()
         self.num_classes = num_classes
-        self.voxel_encoder_latent_dim = 64
+        self.voxel_encoder_latent_dim = 4
         self.plane2polar_depth_channels = 8
         self.voxel_autoencoderkl = AutoEncoderKL3d(
             num_classes,
@@ -358,7 +358,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             self.voxel_encoder_latent_dim,
             64,
             2,
-            4,
+            3,
         )
         self.image_augmentation = ImageAugmentation()
         torch.hub.set_dir(os.path.join(os.curdir, ".torch"))
@@ -412,7 +412,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
                 input.images.data = self.image_augmentation(input.images.data.float()).type_as(input.images.data)
                 input.images.data = input.images.data[:, torch.randperm(input.images.shape[1])]
                 # gt_occ = self.voxel_autoencoderkl.encode(input.occupancy).sample()
-        model_output = self.decode(input.images, (16, 16, 2))
+        model_output = self.decode(input.images, (32, 32, 4))
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
         pos_weight = self.influence_radial_weight(input.occupancy)
         # latent_loss = F.mse_loss(model_output, gt_occ)
@@ -422,7 +422,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             loss = F.binary_cross_entropy_with_logits(
                 pred_occ,
                 input.occupancy,
-                pos_weight=torch.tensor(4, device=pred_occ.device, dtype=pred_occ.dtype),
+                pos_weight=torch.tensor(9, device=pred_occ.device, dtype=pred_occ.dtype),
                 reduction="none",
             )
         else:
