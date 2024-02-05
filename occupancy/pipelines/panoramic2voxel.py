@@ -503,6 +503,7 @@ def config_model(args):
     model.voxel_autoencoderkl.requires_grad_(False)
     # model.image_autoencoderkl.requires_grad_(False)
     # model.image_feature.requires_grad_(False)
+    model.decoder.positional_embeds.requires_grad_(False)
     return model, MultiViewImageToVoxelPipelineInput.from_nuscenes_dataset_item
 
 
