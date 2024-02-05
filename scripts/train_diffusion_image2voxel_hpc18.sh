@@ -1,4 +1,3 @@
-export TORCHDYNAMO_VERBOSE=1
 export WANDB_CACHE_DIR=/scratch/$USER/.cache/wandb
 export WANDB_MODE=disabled
 python -m occupancy.pipelines.train --model autoencoderkl --data-dir /nuscenes/nuscenes \

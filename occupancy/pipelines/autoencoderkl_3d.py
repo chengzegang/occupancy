@@ -237,6 +237,7 @@ class AutoEncoderKL3dConfig:
     base_channels: int = 64
     multiplier: int = 2
     num_layers: int = 3
+
     num_attention_layers: int = 3
 
 
