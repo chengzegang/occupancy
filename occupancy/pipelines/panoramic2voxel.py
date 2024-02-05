@@ -326,18 +326,16 @@ class Bypass(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, patch_size: int):
         super().__init__()
         self.patch_embed = nn.Conv2d(in_channels, out_channels, patch_size, patch_size)
-        self.transformer = Transformer(out_channels, 6, out_channels // 64, 64, max_seq_length=10000)
-        self.zero_head = nn.Linear(out_channels, out_channels)
+        self.head = nn.Linear(out_channels, out_channels)
         self.nonlinear = nn.SiLU(True)
 
-        self.zero_head.weight.data.zero_()
-        self.zero_head.bias.data.zero_()
+        self.head.weight.data.zero_()
+        self.head.bias.data.zero_()
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.patch_embed(x).flatten(2).transpose(-1, -2)
-        x = self.transformer(x)
         x = self.nonlinear(x)
-        x = self.zero_head(x)
+        x = self.head(x)
         return x
 
 
