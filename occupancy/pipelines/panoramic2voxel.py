@@ -267,9 +267,9 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.radius_channels = radius_channels
         self.positional_embeds = nn.Embedding(10000, self.hidden_size)
         self.register_buffer("positional_ids", torch.arange(10000).view(1, -1).long())
-        self.k_encoder = Transformer(self.hidden_size, 8, self.hidden_size // 64, 64, max_seq_length=10000)
-        self.v_encoder = Transformer(self.hidden_size, 8, self.hidden_size // 64, 64, max_seq_length=10000)
-        self.decoder = Transformer(self.hidden_size, 8, self.hidden_size // 64, 64, max_seq_length=10000)
+        self.k_encoder = Transformer(self.hidden_size, 6, self.hidden_size // 64, 64, max_seq_length=10000)
+        self.v_encoder = Transformer(self.hidden_size, 6, self.hidden_size // 64, 64, max_seq_length=10000)
+        self.decoder = Transformer(self.hidden_size, 6, self.hidden_size // 64, 64, max_seq_length=10000)
         self.occ_norm = RMSNorm(self.hidden_size)
         self.nonlinear = nn.SiLU(True)
         self.occ_proj = nn.Linear(self.hidden_size, 64)
@@ -326,7 +326,7 @@ class Bypass(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, patch_size: int):
         super().__init__()
         self.patch_embed = nn.Conv2d(in_channels, out_channels, patch_size, patch_size)
-        self.patch_norm = nn.LayerNorm(out_channels)
+        self.transformer = Transformer(out_channels, 6, out_channels // 64, 64, max_seq_length=10000)
         self.zero_head = nn.Linear(out_channels, out_channels)
         self.nonlinear = nn.SiLU(True)
 
@@ -335,7 +335,7 @@ class Bypass(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.patch_embed(x).flatten(2).transpose(-1, -2)
-        x = self.patch_norm(x)
+        x = self.transformer(x)
         x = self.nonlinear(x)
         x = self.zero_head(x)
         return x
@@ -422,7 +422,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             loss = F.binary_cross_entropy_with_logits(
                 pred_occ,
                 input.occupancy,
-                pos_weight=torch.tensor(3.2, device=pred_occ.device, dtype=pred_occ.dtype),
+                pos_weight=torch.tensor(4, device=pred_occ.device, dtype=pred_occ.dtype),
                 reduction="none",
             )
         else:
