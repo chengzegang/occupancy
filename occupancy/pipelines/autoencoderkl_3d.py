@@ -79,14 +79,14 @@ class VoxelAugmentation(nn.Module):
 
 class AutoEncoderKL3dInput:
     occupancy: Tensor
-    kl_weight: float = 0.001
+    kl_weight: float = 0.01
     clamp_min: float = -30
     clamp_max: float = 20
 
     def __init__(
         self,
         voxel: Tensor,
-        kl_weight: float = 0.001,
+        kl_weight: float = 0.01,
         clamp_min: float = -30,
         clamp_max: float = 20,
         dtype=torch.bfloat16,
