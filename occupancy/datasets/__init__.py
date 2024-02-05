@@ -1,1 +1,1 @@
-from .nuscenes import NuScenesDataset, NuScenesDatasetItem, NuScenesImage, NuScenesPointCloud
+from .nuscenes_dataset import NuScenesDataset, NuScenesDatasetItem, NuScenesImage, NuScenesPointCloud

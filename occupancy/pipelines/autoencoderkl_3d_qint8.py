@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 
 from occupancy import ops
-from occupancy.datasets.nuscenes import NuScenesDataset, NuScenesDatasetItem, NuScenesOccupancyDataset
+from occupancy.datasets.nuscenes_dataset import NuScenesDataset, NuScenesDatasetItem, NuScenesOccupancyDataset
 from occupancy.models.unet_3d import UnetDecoder3d, UnetEncoder3d
 
 

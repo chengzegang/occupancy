@@ -14,7 +14,7 @@ import yaml
 import argparse
 import torch.nn.functional as F
 from tensordict import tensorclass
-from occupancy.datasets.nuscenes import (
+from occupancy.datasets.nuscenes_dataset import (
     NuScenesDatasetItem,
     NuScenesImage,
     NuScenesDataset,
