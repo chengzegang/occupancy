@@ -21,7 +21,7 @@ import threading
 from trimesh.voxel.ops import matrix_to_marching_cubes
 from torch.optim import swa_utils
 
-from occupancy.pipelines import occ_transformer
+from occupancy.pipelines import autoencoderkl_2d, occ_transformer
 from . import autoencoderkl_3d, panoramic2voxel, diffusion3d
 import logging
 
@@ -99,6 +99,8 @@ def config_model(args: argparse.Namespace) -> nn.Module:
             return diffusion3d.config_model(args)
         case "occ_transformer":
             return occ_transformer.config_model(args)
+        case "autoencoderkl_2d":
+            return autoencoderkl_2d.config_model(args)
 
 
 def config_dataloader(args: argparse.Namespace) -> DataLoader:
@@ -111,6 +113,8 @@ def config_dataloader(args: argparse.Namespace) -> DataLoader:
             return diffusion3d.config_dataloader(args)
         case "occ_transformer":
             return occ_transformer.config_dataloader(args)
+        case "autoencoderkl_2d":
+            return autoencoderkl_2d.config_dataloader(args)
 
 
 def to_human_readable(num: int) -> str:
@@ -178,6 +182,8 @@ def record(run, output, model: nn.Module, args: argparse.Namespace, step: int):
     plt.close(fig)
     prediction = None
     ground_truth = None
+    if output.prediction.dim() == 4:
+        return
     if output.prediction.size(1) == 1:
         prediction = output.prediction[0, 0] > 0
         prediction = prediction.cpu().permute(1, 2, 0)
@@ -243,7 +249,6 @@ def train(
             lr=args.lr,
             weight_decay=args.weight_decay,
             amsgrad=True,
-            fused=True,
         )
     total_steps = 2 * len(dl) // args.grad_accum
     scheduler = CosineWarmupLR(optimizer, args.warmup_steps, total_steps)

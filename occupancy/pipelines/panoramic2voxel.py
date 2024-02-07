@@ -187,7 +187,7 @@ class MultiViewImageToVoxelPipelineOutput:
         ch = None
         if self.ground_truth.size(1) == 1:
             i, j, k = torch.where(self.ground_truth[0, 0].detach().cpu() > 0)
-            ih, jh, kh = torch.where(self.prediction[0, 0].detach().cpu() >= 0)
+            ih, jh, kh = torch.where(self.prediction[0, 0].detach().cpu() >= -0.5)
             c = k
             ch = kh
         else:
@@ -267,8 +267,8 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.radius_channels = radius_channels
         self.positional_embeds = nn.Embedding(10000, self.hidden_size)
         self.register_buffer("positional_ids", torch.arange(10000).view(1, -1).long())
-        self.encoder = Transformer(self.hidden_size, 12, self.hidden_size // 64, 64, max_seq_length=10000)
-        self.decoder = ConditionalTransformer(self.hidden_size, 12, self.hidden_size // 64, 64, max_seq_length=10000)
+        self.encoder = Transformer(self.hidden_size, 12, self.hidden_size // 64, 64, max_seq_length=65536)
+        self.decoder = ConditionalTransformer(self.hidden_size, 12, self.hidden_size // 64, 64, max_seq_length=65536)
         self.occ_norm = RMSNorm(self.hidden_size)
         self.nonlinear = nn.SiLU(True)
         self.occ_proj = nn.Linear(self.hidden_size, 4)
@@ -491,7 +491,7 @@ def config_model(args):
     model.voxel_autoencoderkl.decoder = torch.jit.script(model.voxel_autoencoderkl.decoder)
     model.voxel_autoencoderkl.requires_grad_(False)
     # model.image_autoencoderkl.requires_grad_(False)
-    # model.image_feature.requires_grad_(False)
+    model.image_feature.requires_grad_(False)
     # model.decoder.positional_embeds.requires_grad_(False)
     return model, MultiViewImageToVoxelPipelineInput.from_nuscenes_dataset_item
 

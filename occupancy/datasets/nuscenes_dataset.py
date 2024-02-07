@@ -132,7 +132,7 @@ class NuScenesPointCloud:
         z_offset: int = 16,
         ignore_index: int = 0,
     ) -> Tensor:
-        points = points / 0.5
+        points = points / 0.25
 
         # rot = R.from_euler("z", 90, degrees=True).as_matrix()
         # rot = torch.from_numpy(rot).to(torch.float32).to(points.device)
@@ -170,8 +170,9 @@ class NuScenesPointCloud:
         lidar = cls._load_lidar(meta["filename"])
         panoptic = cls._load_panoptic(meta["panoptic"]["filename"])
         rotation = roma.quat_wxyz_to_xyzw(torch.as_tensor(meta["rotation"]))
+
         points = lidar[:, :3]
-        points = roma.quat_action(rotation[None, ...].expand(points.shape[0], -1), points).t()
+        points = roma.quat_action(rotation[None, ...], points.double()).t()
         panoptic = panoptic[None, :] > 0
         panoptic = panoptic.type(torch.long)
         voxel = cls._pointcloud_to_voxelgrid(points, panoptic)
@@ -183,23 +184,24 @@ class NuScenesPointCloud:
         cls, path: str, binary: bool = True, rotate: Optional[Tensor] = None, observable: bool = True
     ) -> Tensor:
         points = torch.from_numpy(np.load(path)).t()
+        points[:3] = points[[2, 1, 0]]
         is_noise = points[3] == 0
         points = points[:, ~is_noise]
         # is_flat = points[3] == 11
         # ind = torch.where(is_flat)[0]
         # other_ind = torch.where(~is_flat)[0]
-        sample_ind = torch.randperm(points.shape[1])[: int(points.shape[1] * 0.5)]
-
-        points = points[:, sample_ind]
-        if observable:
-            norm_p = points[[2, 1, 0]].float()
-            norm_p[0] = (norm_p[0] - 256) / 256
-            norm_p[1] = (norm_p[1] - 256) / 256
-            norm_p[2] = (norm_p[2] - 25) / 20
-            final_ind = ops.filter_observable(norm_p, 0.5, 5)
-            points = points[:, final_ind]
+        # sample_ind = torch.randperm(points.shape[1])[: int(points.shape[1] * 0.5)]
+        #
+        # points = points[:, sample_ind]
+        # if observable:
+        #    norm_p = points[[2, 1, 0]].float()
+        #    norm_p[0] = (norm_p[0] - 256) / 256
+        #    norm_p[1] = (norm_p[1] - 256) / 256
+        #    norm_p[2] = (norm_p[2] - 25) / 20
+        #    final_ind = ops.filter_observable(norm_p, 0.1, 5)
+        #    points = points[:, final_ind]
         if rotate is not None:
-            xyz = points[[2, 1, 0]].clone()
+            xyz = points[:3].clone()
             xyz[0] = xyz[0] - 256
             xyz[1] = xyz[1] - 256
             xyz[2] = xyz[2] - 20
@@ -207,14 +209,21 @@ class NuScenesPointCloud:
             xyz[0] = xyz[0] + 256
             xyz[1] = xyz[1] + 256
             xyz[2] = xyz[2] + 20
-            points[[2, 1, 0]] = xyz
+            points[:3] = xyz
 
-            valid = (xyz[0] >= 0) & (xyz[0] < 512) & (xyz[1] >= 0) & (xyz[1] < 512) & (xyz[2] >= 0) & (xyz[2] < 64)
+            valid = (
+                (points[0] >= 0)
+                & (points[0] < 512)
+                & (points[1] >= 0)
+                & (points[1] < 512)
+                & (points[2] >= 0)
+                & (points[2] < 40)
+            )
             points = points[:, valid]
 
         attrs = points[3].type(torch.long) + 1
         voxel = torch.zeros(512, 512, 40, dtype=torch.long)
-        voxel[points[2].long(), points[1].long(), points[0].long()] = attrs
+        voxel[points[0].long(), points[1].long(), points[2].long()] = attrs
 
         if binary:
             voxel = voxel > 0
@@ -224,7 +233,6 @@ class NuScenesPointCloud:
             voxel = voxel[None, ...].bool()
         # voxel = F.interpolate(voxel.float(), scale_factor=2, mode="trilinear", align_corners=True).bool()
         # voxel = voxel[..., 256:-256, 256:-256, 12 : 12 + 64]
-
         return points, attrs[None, ...], voxel
 
     @classmethod
@@ -251,8 +259,12 @@ class NuScenesPointCloud:
         cls, metadata: dict, binary: bool = True, scale_factor: Optional[float] = None, rotate: Optional[Tensor] = None
     ) -> "NuScenesPointCloud":
         sample_token = metadata["sample_token"]
-        # location, panoptic, occupancy = cls._load_from_raw(metadata)
-        location, panoptic, occupancy = cls._load_occupancy(metadata["occupancy"], binary, scale_factor, rotate)
+        location, panoptic, occupancy = cls._load_from_raw(metadata)
+        # rotation = metadata["rotation"]
+        # rotation = torch.from_numpy(rotation).to(torch.float32).unsqueeze(0)
+        # rotation = roma.quat_wxyz_to_xyzw(rotation)
+        # rotation = roma.unitquat_to_rotmat(rotation)[0]
+        # location, panoptic, occupancy = cls._load_occupancy(metadata["occupancy"], binary, scale_factor, rotation)
         location = MemoryMappedTensor.from_tensor(location[None, ...])
         panoptic = MemoryMappedTensor.from_tensor(panoptic[None, ...])
         occupancy = MemoryMappedTensor.from_tensor(occupancy)
@@ -300,6 +312,25 @@ class NuScenesDatasetItem:
         )
 
     @classmethod
+    def build_depth(
+        cls,
+        image: NuScenesImage,
+        pointcloud: NuScenesPointCloud,
+        fill_value: float = 0,
+        i_scale: float = 1,
+        j_scale: float = 1,
+    ) -> Tensor:
+        image_data = image.data[0].double()
+        intrinsic = image.intrinsic[0].double()
+        rotation = image.rotation[0].double()
+        translation = image.translation[0].double()
+        pointcloud_data = pointcloud.location[0, :3].double()
+        d_image = ops.view_on(
+            image_data, pointcloud_data, intrinsic, rotation, translation, fill_value, i_scale, j_scale
+        )
+        return d_image
+
+    @classmethod
     def view_pointcloud_on_image(
         cls,
         image: NuScenesImage,
@@ -323,15 +354,130 @@ class NuScenesDatasetItem:
             ax = fig.add_subplot(111)
             ax.imshow(TF.to_pil_image(image_data))
             i, j = torch.where((d_image[-1, :, :] > 0).logical_and(torch.isfinite(d_image[-1, :, :])))
-            print(i, j)
-            ax.scatter(j, i, s=figsize_scale, c=d_image[-1, i, j], cmap=cmap)
+            ax.scatter(j, i, s=figsize_scale, c=d_image[-1, i, j], cmap=cmap, alpha=0.5, marker=".")
         return fig
+
+
+@tensorclass
+class NuScenesDepthImage:
+    image: Tensor
+    depth: Tensor
+
+    @classmethod
+    def collate_fn(cls, batch, *, collate_fn_map=None):
+        batch_size = sum([b.batch_size[0] for b in batch])
+        return cls(
+            torch.cat([b.image for b in batch], dim=0),
+            torch.cat([b.depth for b in batch], dim=0),
+            batch_size=[batch_size],
+        )
+
+    @classmethod
+    def from_nuscenes_dataset_item(
+        cls, item: NuScenesDatasetItem, fill_value: float = 200, scale: float = 0.25
+    ) -> "NuScenesDepthImage":
+        build = NuScenesDatasetItem.build_depth
+        i_scale = 256 / item.cam_front.data.shape[-2]
+        j_scale = 256 / item.cam_front.data.shape[-1]
+        item.cam_front.data = F.interpolate(
+            item.cam_front.data, size=(256, 256), mode="bilinear", align_corners=False, antialias=True
+        )
+        item.cam_front_left.data = F.interpolate(
+            item.cam_front_left.data, size=(256, 256), mode="bilinear", align_corners=False, antialias=True
+        )
+        item.cam_front_right.data = F.interpolate(
+            item.cam_front_right.data, size=(256, 256), mode="bilinear", align_corners=False, antialias=True
+        )
+        item.cam_back.data = F.interpolate(
+            item.cam_back.data, size=(256, 256), mode="bilinear", align_corners=False, antialias=True
+        )
+        item.cam_back_left.data = F.interpolate(
+            item.cam_back_left.data, size=(256, 256), mode="bilinear", align_corners=False, antialias=True
+        )
+        item.cam_back_right.data = F.interpolate(
+            item.cam_back_right.data, size=(256, 256), mode="bilinear", align_corners=False, antialias=True
+        )
+
+        depth_images = [
+            build(item.cam_front, item.lidar_top, fill_value, i_scale, j_scale),
+            build(item.cam_front_left, item.lidar_top, fill_value, i_scale, j_scale),
+            build(item.cam_front_right, item.lidar_top, fill_value, i_scale, j_scale),
+            build(item.cam_back, item.lidar_top, fill_value, i_scale, j_scale),
+            build(item.cam_back_left, item.lidar_top, fill_value, i_scale, j_scale),
+            build(item.cam_back_right, item.lidar_top, fill_value, i_scale, j_scale),
+        ]
+        depth_images = torch.stack(depth_images, dim=0)
+        height = depth_images.shape[-2]
+        depth_images = depth_images[..., height // 4 :, :]
+        images = depth_images[:, :3].clamp(0, 1)
+        depth_images = depth_images[:, 3:]
+        return cls(
+            images,
+            depth_images,
+            batch_size=[depth_images.shape[0]],
+        )
 
 
 default_collate_fn_map[MemoryMappedTensor] = default_collate_fn_map[Tensor]
 default_collate_fn_map[NuScenesImage] = NuScenesImage.collate_fn
 default_collate_fn_map[NuScenesPointCloud] = NuScenesPointCloud.collate_fn
 default_collate_fn_map[NuScenesDatasetItem] = NuScenesDatasetItem.collate_fn
+default_collate_fn_map[NuScenesDepthImage] = NuScenesDepthImage.collate_fn
+
+
+class NuScenesDepthImageDataset(Dataset):
+    def __init__(
+        self,
+        data_dir: str,
+        version: str = "v1.0-trainval",
+        verbose: bool = True,
+        force_rebuild: bool = False,
+        metadata_filename: Optional[str] = "metadata.parquet",
+    ):
+
+        self.occupancy = self.build_occupancy_path(data_dir)
+        self.data_dir = data_dir
+        self.meta_path = os.path.join(data_dir, metadata_filename)
+        if os.path.isfile(self.meta_path) and not force_rebuild:
+            self.metadata = pd.read_parquet(self.meta_path)
+            return
+        nusc = NuScenes(
+            version=version,
+            dataroot=data_dir,
+            verbose=verbose,
+        )
+        metadata = self._build_metadata(nusc)
+        metadata.to_parquet(self.meta_path)
+
+    def build_occupancy_path(self, root: str) -> dict:
+        files = glob.glob(os.path.join(root, "nuScenes-Occupancy-v0.1", "**", "*.npy"), recursive=True)
+        mapping = {os.path.basename(f).split(".")[0]: f for f in files}
+        return mapping
+
+    def get_metadata(self, index: int) -> dict:
+        column_index = [
+            "CAM_FRONT",
+            "CAM_FRONT_LEFT",
+            "CAM_FRONT_RIGHT",
+            "LIDAR_TOP",
+            "CAM_BACK",
+            "CAM_BACK_LEFT",
+            "CAM_BACK_RIGHT",
+            "panoptic",
+        ]
+        metadata = self.metadata.iloc[index]
+
+        data = metadata[column_index]
+        data["LIDAR_TOP"]["occupancy"] = self.occupancy[data["LIDAR_TOP"]["sample_token"]]
+        return data
+
+    def __len__(self):
+        return len(self.metadata)
+
+    def __getitem__(self, index: int) -> NuScenesDepthImage:
+        metadata = self.get_metadata(index)
+        data = NuScenesDatasetItem.load(metadata, True, 1)
+        return NuScenesDepthImage.from_nuscenes_dataset_item(data)
 
 
 class NuScenesOccupancyDataset(Dataset):

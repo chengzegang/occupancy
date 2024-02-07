@@ -6,7 +6,36 @@ from torch import Tensor
 import roma
 
 
-def view_on(image: Tensor, points: Tensor, intrinsic: Tensor, rotation: Tensor, translation: Tensor, fill_value: float = 0) -> Tensor:
+def project_on(depth_image: Tensor, intrinsic: Tensor, rotation: Tensor, translation: Tensor) -> Tensor:
+    """
+    depth_image: (H, W)
+    intrinsic: (3, 3)
+    rotation: (3, 3)
+    translation: (3,)
+    """
+    i, j = torch.meshgrid(torch.arange(depth_image.shape[0]), torch.arange(depth_image.shape[1]), indexing="ij")
+    i = i.float()
+    j = j.float()
+    k = depth_image
+
+    ijk = torch.stack([i, j, k], dim=0).view(3, -1)
+    N = ijk.shape[-1]
+    ijk = torch.matmul(torch.inverse(intrinsic), ijk)
+    ijk = roma.quat_action(rotation.expand(N, -1), ijk.T) + translation
+    ijk = ijk.T
+    return ijk
+
+
+def view_on(
+    image: Tensor,
+    points: Tensor,
+    intrinsic: Tensor,
+    rotation: Tensor,
+    translation: Tensor,
+    fill_value: float = 0,
+    i_scale: float = 1,
+    j_scale: float = 1,
+) -> Tensor:
     """
     image(3, H, W)
     points: (3, N)
@@ -31,19 +60,30 @@ def view_on(image: Tensor, points: Tensor, intrinsic: Tensor, rotation: Tensor, 
     points = points[:, mask]
     points = points / points[2:3, :]
     r = r[mask]
-    print(points.long())
 
     # check if points are in image
+
+    points[0, :] = points[0, :] * j_scale
+    points[1, :] = points[1, :] * i_scale
     x = points[0, :]
     y = points[1, :]
+
     mask = (x >= 0) & (x < image.shape[-1]) & (y >= 0) & (y < image.shape[-2])
     points = points[:, mask]
-    print(torch.numel(points))
+
     r = r[mask]
 
     # convert to pixel coordinates
-    points = points[0:2, :].floor_().long()
+    depth = torch.full_like(image[[0], :, :], fill_value, device=image.device, dtype=image.dtype)
 
-    image = torch.cat([image, torch.full_like(image[0:1, :, :], fill_value)], dim=0)
-    image[:, points[1, :], points[0, :]] = r
+    points = points[:3, :].floor_().long()
+    ind = points[1, :] * depth.shape[-1] + points[0, :]
+    shape = depth.shape
+
+    depth = depth.view(-1)
+    depth = depth.scatter_reduce_(0, ind, r, "mean", include_self=False)
+
+    depth = depth.view(shape)
+    image = torch.cat([image, depth], dim=0)
+
     return image

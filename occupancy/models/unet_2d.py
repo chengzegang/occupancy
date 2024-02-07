@@ -1,7 +1,7 @@
 __all__ = ["unet_encoder2d", "unet_decoder2d"]
 import torch
 from torch import nn, Tensor
-from .transformer import RMSNorm, Attention
+from .transformer import RMSNorm, Attention, SwiGLU
 
 
 @torch.jit.script
@@ -26,21 +26,30 @@ class SpatialRMSNorm(nn.Module):
 
 
 class AttentionLayer2d(nn.Module):
+
     def __init__(self, hidden_size: int, num_heads: int, head_size: int):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_size = head_size
-        self.norm = RMSNorm(hidden_size)
+        self.ln1 = RMSNorm(hidden_size)
         self.attention = Attention(hidden_size, num_heads, head_size)
+        self.ln2 = RMSNorm(hidden_size)
+        self.mlp = SwiGLU(hidden_size, hidden_size * 8 // 3)
 
     def forward(self, hidden_states: Tensor) -> Tensor:
         input_seq = hidden_states.flatten(2).transpose(-1, -2)
         residual = input_seq
 
-        input_seq = self.norm(input_seq)
+        input_seq = self.ln1(residual)
         input_seq = self.attention(input_seq)
         input_seq = input_seq + residual
+
+        residual = input_seq
+        input_seq = self.ln2(residual)
+        input_seq = self.mlp(input_seq)
+        input_seq = input_seq + residual
+
         hidden_states = input_seq.transpose(-1, -2).view_as(hidden_states)
         return hidden_states
 
@@ -115,6 +124,7 @@ class UnetEncoder2d(nn.Module):
 
         for i in range(num_layers):
             self.layers.append(UnetEncoderLayer2d(_in_channels[i], _out_channels[i]))
+        self.layers.append(UnetResidualLayer2d(_out_channels[-1], _out_channels[-1]))
         self.layers.append(AttentionLayer2d(_out_channels[-1], num_heads, 128))
         self.layers.append(SpatialRMSNorm(_out_channels[-1])) if out_norm else None
         self.layers.append(nn.SiLU(True)) if out_norm else None
@@ -208,6 +218,42 @@ class SwiGLU2d(nn.Module):
         return hidden
 
 
+class UnetResidualLayer2d(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.norm1 = SpatialRMSNorm(in_channels)
+        self.conv1 = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+        )
+        self.norm2 = SpatialRMSNorm(out_channels)
+        self.conv2 = nn.Conv2d(
+            out_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+        )
+        self.shorcut = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=1,
+        )
+        self.nonlinear = nn.SiLU(True)
+
+    def forward(self, input_embeds: Tensor) -> Tensor:
+        residual = self.shorcut(input_embeds)
+        input_embeds = self.norm1(input_embeds)
+        input_embeds = self.nonlinear(input_embeds)
+        input_embeds = self.conv1(input_embeds)
+        input_embeds = self.norm2(input_embeds)
+        input_embeds = self.nonlinear(input_embeds)
+        input_embeds = self.conv2(input_embeds)
+        input_embeds = input_embeds + residual
+        return input_embeds
+
+
 class UnetDecoder2d(nn.Module):
     def __init__(
         self,
@@ -239,6 +285,7 @@ class UnetDecoder2d(nn.Module):
                 128,
             )
         )
+        self.layers.append(UnetResidualLayer2d(_in_channels[0], _in_channels[0]))
         for i in range(num_layers):
             self.layers.append(UnetDecoderLayer2d(_in_channels[i], _out_channels[i]))
         self.layers.append(SpatialRMSNorm(base_channels))

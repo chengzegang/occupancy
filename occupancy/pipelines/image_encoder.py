@@ -147,96 +147,16 @@ class LatentEncoder2dOutput:
         self.latent_dist = latent_dist
         self.latent_sample = latent_sample
 
-    @property
-    @torch.jit.ignore
-    def recon_loss(self) -> Tensor:
-        if self.ground_truth.size(1) == 1:
-            return F.binary_cross_entropy_with_logits(
-                self.prediction,
-                self.ground_truth,
-                reduction="none",
-                pos_weight=torch.tensor(3.2, device=self.prediction.device),
-            )
-        label = self.ground_truth.argmax(dim=1)
-        population = torch.bincount(label.flatten(), minlength=18).float()
-        weight = torch.pow(torch.numel(label) / population * 4 * math.pi / 3, 1 / 3)
-        loss = F.cross_entropy(
-            self.prediction.permute(0, 2, 3, 4, 1).flatten(0, -2),
-            label.flatten(),
-            weight=weight.type_as(self.prediction),
-        )
-        return loss
-
-    @property
-    @torch.jit.ignore
-    def loss(self) -> Tensor:
-        return self.recon_loss.mean() + self.kl_loss.mean()
-
-    @property
-    @torch.jit.unused
-    def iou(self):
-        if self.ground_truth.size(1) == 1:
-            return ops.iou(self.prediction.flatten() >= 0, self.ground_truth.flatten() > 0, 2, 0)
-        else:
-            return ops.iou(
-                self.prediction.argmax(dim=1).flatten() > 0, self.ground_truth.argmax(dim=1).flatten() > 0, 2, 0
-            )
-
-    @property
-    @torch.jit.unused
-    def figure(self) -> plt.Figure:
-        i, j, k = None, None, None
-        ih, jh, kh = None, None, None
-        c = None
-        ch = None
-        if self.ground_truth.size(1) == 1:
-            i, j, k = torch.where(self.ground_truth[0, 0].detach().cpu() > 0)
-            ih, jh, kh = torch.where(self.prediction[0, 0].detach().cpu() >= 0)
-            c = k
-            ch = kh
-        else:
-            label = self.ground_truth[0].argmax(dim=0).detach().cpu()
-            i, j, k = torch.where(label)
-            c = label[i, j, k]
-            c = self._CMAP[c] / 255.0
-
-            pred = self.prediction[0].argmax(dim=0).detach().cpu()
-            ih, jh, kh = torch.where(pred)
-            ch = pred[ih, jh, kh]
-            ch = self._CMAP[ch] / 255.0
-
-        fig = plt.figure(figsize=(20, 10))
-        fig.suptitle(f"iou: {self.iou[0, 1].item():.2%}")
-        ax = fig.add_subplot(1, 2, 1, projection="3d")
-        ax.scatter(i, j, k, c=c, s=1, marker="s")
-        ax.set_title("Ground Truth")
-        ax.set_box_aspect((1, 1, self.ground_truth.shape[-1] / self.ground_truth.shape[-3]))
-        ax.set_xlim(0, self.ground_truth.shape[-3])
-        ax.set_ylim(0, self.ground_truth.shape[-2])
-        ax.set_zlim(0, self.ground_truth.shape[-1])
-        ax.set_zticks([])
-
-        ax = fig.add_subplot(1, 2, 2, projection="3d")
-        ax.scatter(ih, jh, kh, c=ch, s=1, marker="s")
-        ax.set_title("Prediction")
-        ax.set_box_aspect((1, 1, self.ground_truth.shape[-1] / self.ground_truth.shape[-3]))
-        ax.set_xlim(0, self.ground_truth.shape[-3])
-        ax.set_ylim(0, self.ground_truth.shape[-2])
-        ax.set_zlim(0, self.ground_truth.shape[-1])
-        ax.set_zticks([])
-
-        return fig
-
 
 @dataclass
 class AutoEncoderKL3dConfig:
     in_channels: int = 1
     out_channels: int = 1
-    latent_dim: int = 64
+    latent_dim: int = 4
     base_channels: int = 64
     multiplier: int = 2
-    num_layers: int = 4
-    num_attention_layers: int = 3
+    num_layers: int = 3
+    num_attention_layers: int = 1
 
 
 class LatentEncoder2d(nn.Module):
@@ -254,12 +174,6 @@ class LatentEncoder2d(nn.Module):
         super().__init__()
         self.latent_scale = 1 / 10
         self.voxel_augmentation = VoxelAugmentation()
-        from diffusers import AutoencoderKL
-
-        self.image_autoencoderkl = AutoencoderKL.from_pretrained(
-            "stabilityai/sdxl-vae", torch_dtype=torch.bfloat16, torchscript=True, device_map="auto"
-        )
-        self.encoder = Transformer(self.hidden_size, 8, self.hidden_size // 128, 128, max_seq_length=10000)
 
     def forward(
         self,

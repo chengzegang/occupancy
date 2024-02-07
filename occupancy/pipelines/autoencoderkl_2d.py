@@ -22,9 +22,16 @@ from torch.quantization import DeQuantStub, QuantStub, fuse_modules
 from torch.utils.checkpoint import checkpoint
 from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
-
+import torchvision.transforms.v2.functional as TF
 from occupancy import ops
-from occupancy.datasets.nuscenes_dataset import NuScenesDataset, NuScenesDatasetItem, NuScenesOccupancyDataset
+from occupancy.datasets.nuscenes_dataset import (
+    NuScenesDataset,
+    NuScenesDatasetItem,
+    NuScenesDepthImage,
+    NuScenesDepthImageDataset,
+    NuScenesOccupancyDataset,
+)
+from occupancy.models.unet_2d import UnetDecoder2d, UnetEncoder2d
 from occupancy.models.unet_3d import UnetDecoder3d, UnetEncoder3d
 
 
@@ -62,46 +69,34 @@ class GaussianDistribution:
         return 0.5 * ((sample - self.mean) ** 2 / (self.logvar.exp() + 1e-8) + self.logvar)
 
 
-class VoxelAugmentation(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, voxel: Tensor) -> Tensor:
-        if self.training:
-            voxel = voxel + (torch.rand_like(voxel) > 0.996).type_as(voxel)
-            return voxel
-
-
-class AutoEncoderKL3dInput:
-    occupancy: Tensor
-    kl_weight: float = 0.0001
-    clamp_min: float = -30
-    clamp_max: float = 20
+class AutoEncoderKL2dInput:
+    image: Tensor
+    depth: Tensor
+    kl_weight: float
+    clamp_min: float
+    clamp_max: float
 
     def __init__(
         self,
-        voxel: Tensor,
-        kl_weight: float = 0.0001,
+        item: NuScenesDepthImage,
+        kl_weight: float = 1,
         clamp_min: float = -30,
         clamp_max: float = 20,
         dtype=torch.bfloat16,
         device="cuda",
     ):
-        voxel = voxel.type(dtype).to(device)
-        self.occupancy = voxel  # self.splicing(voxel)
+        item = item.to(dtype=dtype, device=device)
+        self.image = item.image
+        self.depth = item.depth
         self.kl_weight = kl_weight
         self.clamp_min = clamp_min
         self.clamp_max = clamp_max
 
-    def splicing(self, voxel: Tensor):
-        i = random.randint(0, 255)
-        j = random.randint(0, 255)
-        return voxel[..., i : i + 256, j : j + 256, :]
 
-
-class AutoEncoderKL3dOutput:
+class AutoEncoderKL2dOutput:
     prediction: Tensor
     ground_truth: Tensor
+    image: Tensor
     kl_loss: Tensor
     latent_dist: GaussianDistribution
     latent_sample: Tensor
@@ -133,12 +128,14 @@ class AutoEncoderKL3dOutput:
         self,
         prediction: Tensor,
         ground_truth: Tensor,
+        image: Tensor,
         kl_loss: Tensor,
         latent_dist: GaussianDistribution,
         latent_sample: Tensor,
     ):
         self.prediction = prediction
         self.ground_truth = ground_truth
+        self.image = image
         self.kl_loss = kl_loss
         self.latent_dist = latent_dist
         self.latent_sample = latent_sample
@@ -146,22 +143,8 @@ class AutoEncoderKL3dOutput:
     @property
     @torch.jit.ignore
     def recon_loss(self) -> Tensor:
-        if self.ground_truth.size(1) == 1:
-            return F.binary_cross_entropy_with_logits(
-                self.prediction,
-                self.ground_truth,
-                reduction="none",
-                pos_weight=torch.tensor(3.2, device=self.prediction.device),
-            )
-        label = self.ground_truth.argmax(dim=1)
-        population = torch.bincount(label.flatten(), minlength=18).float()
-        weight = torch.pow(torch.numel(label) / population * 4 * math.pi / 3, 1 / 3)
-        loss = F.cross_entropy(
-            self.prediction.permute(0, 2, 3, 4, 1).flatten(0, -2),
-            label.flatten(),
-            weight=weight.type_as(self.prediction),
-        )
-        return loss
+        mask = self.ground_truth < 200
+        return F.mse_loss(self.prediction, self.ground_truth, reduction="none")[mask]
 
     @property
     @torch.jit.ignore
@@ -170,101 +153,52 @@ class AutoEncoderKL3dOutput:
 
     @property
     @torch.jit.unused
-    def iou(self):
-        if self.ground_truth.size(1) == 1:
-            return ops.iou(self.prediction.flatten() >= 0, self.ground_truth.flatten() > 0, 2, 0)
-        else:
-            return ops.iou(
-                self.prediction.argmax(dim=1).flatten() > 0, self.ground_truth.argmax(dim=1).flatten() > 0, 2, 0
-            )
-
-    @property
-    @torch.jit.unused
     def figure(self) -> plt.Figure:
-        i, j, k = None, None, None
-        ih, jh, kh = None, None, None
-        c = None
-        ch = None
-        if self.ground_truth.size(1) == 1:
-            i, j, k = torch.where(self.ground_truth[0, 0].detach().cpu() > 0)
-            ih, jh, kh = torch.where(self.prediction[0, 0].detach().cpu() >= 0)
-            c = k
-            ch = kh
-        else:
-            i, j, k = torch.where(self.ground_truth[0].argmax(dim=0).detach().cpu() > 0)
-            c = self.ground_truth[0].argmax(dim=0)[i, j, k].detach().cpu()
-            c = self._CMAP[c] / 255.0
-
-            ih, jh, kh = torch.where(self.prediction[0].argmax(dim=0).detach().cpu() > 0)
-            ch = self.prediction[0].argmax(dim=0)[ih, jh, kh].detach().cpu()
-            ch = self._CMAP[ch] / 255.0
-
-        fig = plt.figure(figsize=(20, 10))
-        fig.suptitle(f"iou: {self.iou[0, 1].item():.2%}")
-        ax = fig.add_subplot(1, 2, 1, projection="3d")
-        ax.scatter(i, j, k, c=c, s=1, marker="s", alpha=0.8)
+        gt = TF.to_pil_image(self.ground_truth[0].float() / 256, mode="L")
+        pred = TF.to_pil_image(self.prediction[0].float() / 256, mode="L")
+        img = TF.to_pil_image(self.image[0].float())
+        fig = plt.figure(figsize=(15, 5))
+        ax = fig.add_subplot(1, 3, 1)
+        ax.imshow(gt, cmap="viridis_r")
         ax.set_title("Ground Truth")
-        ax.set_box_aspect((1, 1, 1 / 10))
-        ax.set_xlim(0, 256)
-        ax.set_ylim(0, 256)
-        ax.set_zticks([])
-        ax.view_init(azim=-45, elev=45)
-
-        ax = fig.add_subplot(1, 2, 2, projection="3d")
-        ax.scatter(ih, jh, kh, c=ch, s=1, marker="s", alpha=0.8)
+        ax.axis("off")
+        ax = fig.add_subplot(1, 3, 2)
+        ax.imshow(pred, cmap="viridis_r")
         ax.set_title("Prediction")
-        ax.set_box_aspect((1, 1, 1 / 10))
-        ax.set_xlim(0, 256)
-        ax.set_ylim(0, 256)
-        ax.set_zticks([])
-        ax.view_init(azim=-45, elev=45)
-
+        ax.axis("off")
+        ax = fig.add_subplot(1, 3, 3)
+        ax.imshow(img)
+        ax.set_title("Image")
+        ax.axis("off")
         return fig
 
 
-@dataclass
-class AutoEncoderKL3dConfig:
-    in_channels: int = 1
-    out_channels: int = 1
-    latent_dim: int = 64
-    base_channels: int = 64
-    multiplier: int = 2
-    num_layers: int = 4
-    num_attention_layers: int = 3
-
-
-class AutoEncoderKL3d(nn.Module):
+class AutoEncoderKL2d(nn.Module):
     def __init__(
         self,
         in_channels: int,
         out_channels: int,
-        latent_dim: int,
-        base_channels: int = 64,
+        latent_dim: int = 4,
+        base_channels: int = 128,
         multiplier: int = 2,
         num_layers: int = 3,
-        num_attention_layers: int = 3,
         exportable: bool = False,
     ):
         super().__init__()
         self.latent_scale = 1 / 10
-        self.voxel_augmentation = VoxelAugmentation()
-        self.encoder = UnetEncoder3d(
+        self.encoder = UnetEncoder2d(
             in_channels=in_channels,
             latent_dim=latent_dim * 2,
             base_channels=base_channels,
             multiplier=multiplier,
             num_layers=num_layers,
-            num_attention_layers=num_attention_layers,
-            exportable=exportable,
         )
-        self.decoder = UnetDecoder3d(
+        self.decoder = UnetDecoder2d(
             out_channels=out_channels,
             latent_dim=latent_dim,
             base_channels=base_channels,
             multiplier=multiplier,
             num_layers=num_layers,
-            num_attention_layers=num_attention_layers,
-            exportable=exportable,
         )
 
     def encode_latent(self, voxel_inputs: Tensor) -> Tensor:
@@ -280,37 +214,23 @@ class AutoEncoderKL3d(nn.Module):
         latent = latent / self.latent_scale
         return self.decoder(latent)
 
-    def _forward_batchsize_one(self, voxel: Tensor) -> Tensor:
-        latent = self.encode_latent(voxel)
-        latent_dist = GaussianDistribution.from_latent(latent, latent_scale=self.latent_scale)
-        latent_sample = latent_dist.sample()
-        pred_output = self.decode(latent_sample)
-        return latent, pred_output
-
     def forward(
         self,
-        input: AutoEncoderKL3dInput,
-    ) -> AutoEncoderKL3dOutput:
+        input: AutoEncoderKL2dInput,
+    ) -> AutoEncoderKL2dOutput:
         # NOTE: due to pytorch baddmm bug, we use pipeline optimization to force use of addmm
-        voxel = self.voxel_augmentation(input.occupancy)
-        voxel = torch.unbind(voxel, dim=0)
-
-        latent, pred_output = zip(*[self._forward_batchsize_one(v[None, ...]) for v in voxel])
-        latent = torch.cat(latent, dim=0)
-        pred_output = torch.cat(pred_output, dim=0)
+        latent = self.encode_latent(input.image)
         latent_dist = GaussianDistribution.from_latent(latent, input.clamp_min, input.clamp_max, self.latent_scale)
         kl_loss = input.kl_weight * latent_dist.kl_loss
-        return AutoEncoderKL3dOutput(
+        pred_output = torch.exp(self.decode(latent_dist.sample())) * 100
+        return AutoEncoderKL2dOutput(
             pred_output,
-            input.occupancy,
+            input.depth,
+            input.image,
             kl_loss,
             latent_dist,
             latent_dist.sample(),
         )
-
-    @classmethod
-    def from_config(cls, config: AutoEncoderKL3dConfig) -> "AutoEncoderKL3d":
-        return cls(**asdict(config))
 
 
 def load_model(model, path, partial=True):
@@ -327,20 +247,19 @@ def load_model(model, path, partial=True):
 
 
 def config_model(args):
-    model_config = AutoEncoderKL3dConfig(in_channels=args.num_classes, out_channels=args.num_classes)
     os.makedirs(args.save_dir, exist_ok=True)
-    model = AutoEncoderKL3d.from_config(model_config)
+    model = AutoEncoderKL2d(in_channels=3, out_channels=1)
     try:
-        model = load_model(model, os.path.join(args.save_dir, f"autoencoderkl-cls{args.num_classes}.pt"), partial=True)
+        model = load_model(model, os.path.join(args.save_dir, f"{args.model}-cls{args.num_classes}.pt"), partial=True)
     except Exception as e:
         print(e)
         pass
     model.to(args.dtype).to(args.device)
-    return model, AutoEncoderKL3dInput
+    return model, AutoEncoderKL2dInput
 
 
 def config_dataloader(args):
-    dataset = NuScenesOccupancyDataset(args.data_dir, binary=args.num_classes == 1)
+    dataset = NuScenesDepthImageDataset(args.data_dir)
     sampler = None
     if args.ddp:
         sampler = DistributedSampler(dataset)
