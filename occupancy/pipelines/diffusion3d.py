@@ -34,7 +34,6 @@ from occupancy.models.unet_conditional_attention_timestep_3d import UnetConditio
 from .autoencoderkl_3d import (
     AutoEncoderKL3dInput,
     AutoEncoderKL3dOutput,
-    AutoEncoderKL3dConfig,
     AutoEncoderKL3d,
     GaussianDistribution,
 )

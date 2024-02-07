@@ -79,14 +79,14 @@ class VoxelAugmentation(nn.Module):
 
 class AutoEncoderKL3dInput:
     occupancy: Tensor
-    kl_weight: float = 0.1
-    clamp_min: float = -30
-    clamp_max: float = 20
+    kl_weight: float
+    clamp_min: float
+    clamp_max: float
 
     def __init__(
         self,
         voxel: Tensor,
-        kl_weight: float = 0.1,
+        kl_weight: float = 0.05,
         clamp_min: float = -30,
         clamp_max: float = 20,
         dtype=torch.bfloat16,
@@ -156,7 +156,7 @@ class AutoEncoderKL3dOutput:
                 self.prediction,
                 self.ground_truth,
                 reduction="none",
-                pos_weight=torch.tensor(3.2, device=self.prediction.device),
+                pos_weight=torch.tensor(2.0).type_as(self.prediction),
             )
         label = self.ground_truth.argmax(dim=1)
         population = torch.bincount(label.flatten(), minlength=18).float()
@@ -229,28 +229,16 @@ class AutoEncoderKL3dOutput:
         return fig
 
 
-@dataclass
-class AutoEncoderKL3dConfig:
-    in_channels: int = 1
-    out_channels: int = 1
-    latent_dim: int = 4
-    base_channels: int = 64
-    multiplier: int = 2
-    num_layers: int = 3
-
-    num_attention_layers: int = 3
-
-
 class AutoEncoderKL3d(nn.Module):
     def __init__(
         self,
         in_channels: int,
         out_channels: int,
-        latent_dim: int,
+        latent_dim: int = 4,
         base_channels: int = 64,
         multiplier: int = 2,
         num_layers: int = 3,
-        num_attention_layers: int = 3,
+        num_attention_layers: int = 1,
         exportable: bool = False,
     ):
         super().__init__()
@@ -316,10 +304,6 @@ class AutoEncoderKL3d(nn.Module):
             latent_dist.sample(),
         )
 
-    @classmethod
-    def from_config(cls, config: AutoEncoderKL3dConfig) -> "AutoEncoderKL3d":
-        return cls(**asdict(config))
-
 
 def load_model(model, path, partial=True):
     state_dict = torch.load(path, mmap=True)
@@ -335,9 +319,8 @@ def load_model(model, path, partial=True):
 
 
 def config_model(args):
-    model_config = AutoEncoderKL3dConfig(in_channels=args.num_classes, out_channels=args.num_classes)
     os.makedirs(args.save_dir, exist_ok=True)
-    model = AutoEncoderKL3d.from_config(model_config)
+    model = AutoEncoderKL3d(in_channels=args.num_classes, out_channels=args.num_classes)
     try:
         model = load_model(model, os.path.join(args.save_dir, f"autoencoderkl-cls{args.num_classes}.pt"), partial=True)
     except Exception as e:

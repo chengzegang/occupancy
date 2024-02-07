@@ -2,7 +2,7 @@ __all__ = ["unet_encoder3d", "unet_decoder3d"]
 import math
 import torch
 from torch import nn, Tensor
-from .transformer import RMSNorm, Attention, RotaryEmbedding, Transformer
+from .transformer import RMSNorm, Attention, RotaryEmbedding, SwiGLU, Transformer
 
 
 @torch.jit.script
@@ -19,8 +19,8 @@ class SpatialRMSNorm(nn.Module):
         super().__init__()
         self.num_features = num_features
         self.eps = eps
-        self.scale = nn.Parameter(torch.ones(num_features, dtype=torch.bfloat16))
-        self.bias = nn.Parameter(torch.zeros(num_features, dtype=torch.bfloat16))
+        self.scale = nn.Parameter(torch.ones(num_features))
+        self.bias = nn.Parameter(torch.zeros(num_features))
 
     def forward(self, hidden_states: Tensor) -> Tensor:
         return fused_spatial_rmsnorm(hidden_states, self.scale, self.bias, self.eps)
@@ -41,22 +41,18 @@ class ExportableAttention(nn.Module):
         self.q_proj = nn.Linear(
             hidden_states,
             num_heads * head_size,
-            dtype=torch.bfloat16,
         )
         self.k_proj = nn.Linear(
             hidden_states,
             num_heads * head_size,
-            dtype=torch.bfloat16,
         )
         self.v_proj = nn.Linear(
             hidden_states,
             num_heads * head_size,
-            dtype=torch.bfloat16,
         )
         self.out_proj = nn.Linear(
             num_heads * head_size,
             hidden_states,
-            dtype=torch.bfloat16,
         )
         self.rotary = RotaryEmbedding(head_size)
 
@@ -83,16 +79,24 @@ class ExportableAttentionLayer3d(nn.Module):
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_size = head_size
-        self.norm = RMSNorm(hidden_size)
-        self.attention = ExportableAttention(hidden_size, num_heads, head_size)
+        self.ln1 = RMSNorm(hidden_size)
+        self.attention = ExportableAttentionLayer3d(hidden_size, num_heads, head_size)
+        self.ln2 = RMSNorm(hidden_size)
+        self.mlp = SwiGLU(hidden_size, hidden_size * 8 // 3)
 
     def forward(self, hidden_states: Tensor) -> Tensor:
         input_seq = hidden_states.flatten(2).transpose(-1, -2)
         residual = input_seq
 
-        input_seq = self.norm(input_seq)
+        input_seq = self.ln1(residual)
         input_seq = self.attention(input_seq)
         input_seq = input_seq + residual
+
+        residual = input_seq
+        input_seq = self.ln2(residual)
+        input_seq = self.mlp(input_seq)
+        input_seq = input_seq + residual
+
         hidden_states = input_seq.transpose(-1, -2).view_as(hidden_states)
         return hidden_states
 
@@ -103,18 +107,62 @@ class AttentionLayer3d(nn.Module):
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_size = head_size
-        self.norm = RMSNorm(hidden_size)
+        self.ln1 = RMSNorm(hidden_size)
         self.attention = Attention(hidden_size, num_heads, head_size)
+        self.ln2 = RMSNorm(hidden_size)
+        self.mlp = SwiGLU(hidden_size, hidden_size * 8 // 3)
 
     def forward(self, hidden_states: Tensor) -> Tensor:
         input_seq = hidden_states.flatten(2).transpose(-1, -2)
         residual = input_seq
 
-        input_seq = self.norm(input_seq)
+        input_seq = self.ln1(residual)
         input_seq = self.attention(input_seq)
         input_seq = input_seq + residual
+
+        residual = input_seq
+        input_seq = self.ln2(residual)
+        input_seq = self.mlp(input_seq)
+        input_seq = input_seq + residual
+
         hidden_states = input_seq.transpose(-1, -2).view_as(hidden_states)
         return hidden_states
+
+
+class UnetResidualLayer3d(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.norm1 = SpatialRMSNorm(in_channels)
+        self.conv1 = nn.Conv3d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+        )
+        self.norm2 = SpatialRMSNorm(out_channels)
+        self.conv2 = nn.Conv3d(
+            out_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+        )
+        self.shorcut = nn.Conv3d(
+            in_channels,
+            out_channels,
+            kernel_size=1,
+        )
+        self.nonlinear = nn.SiLU(True)
+
+    def forward(self, input_embeds: Tensor) -> Tensor:
+        residual = self.shorcut(input_embeds)
+        input_embeds = self.norm1(input_embeds)
+        input_embeds = self.nonlinear(input_embeds)
+        input_embeds = self.conv1(input_embeds)
+        input_embeds = self.norm2(input_embeds)
+        input_embeds = self.nonlinear(input_embeds)
+        input_embeds = self.conv2(input_embeds)
+        input_embeds = input_embeds + residual
+        return input_embeds
 
 
 class UnetEncoderLayer3d(nn.Module):
@@ -176,7 +224,6 @@ class UnetEncoder3d(nn.Module):
         self.latent_dim = latent_dim
         _in_channels = [int(base_channels * multiplier**i) for i in range(num_layers)]
         _out_channels = [int(base_channels * multiplier**i) for i in range(1, num_layers + 1)]
-        num_heads = _out_channels[-1] // 128
         self.layers = nn.Sequential()
         self.layers.append(
             nn.Conv3d(
@@ -188,11 +235,13 @@ class UnetEncoder3d(nn.Module):
 
         for i in range(num_layers):
             self.layers.append(UnetEncoderLayer3d(_in_channels[i], _out_channels[i]))
+
+        self.layers.append(UnetResidualLayer3d(_out_channels[-1], _out_channels[-1]))
         for _ in range(num_attention_layers):
             self.layers.append(
-                AttentionLayer3d(_out_channels[-1], num_heads, 128)
+                AttentionLayer3d(_out_channels[-1], _out_channels[-1] // 64, 64)
                 if not exportable
-                else ExportableAttentionLayer3d(_out_channels[-1], num_heads, 128)
+                else ExportableAttentionLayer3d(_out_channels[-1], _out_channels[-1] // 64, 64)
             )
         self.layers.append(SpatialRMSNorm(_out_channels[-1]))
         self.layers.append(nn.SiLU(True))
@@ -267,7 +316,6 @@ class UnetDecoder3d(nn.Module):
         self.out_channels = out_channels
         _in_channels = [int(base_channels * multiplier**i) for i in range(num_layers, 0, -1)]
         _out_channels = [int(base_channels * multiplier**i) for i in range(num_layers - 1, -1, -1)]
-        num_heads = _in_channels[0] // 128
 
         self.layers = nn.Sequential()
         self.layers.append(
@@ -279,14 +327,11 @@ class UnetDecoder3d(nn.Module):
         )
         for _ in range(num_attention_layers):
             self.layers.append(
-                AttentionLayer3d(
-                    _in_channels[0],
-                    num_heads,
-                    128,
-                )
+                AttentionLayer3d(_in_channels[0], _in_channels[0] // 64, 64)
                 if not exportable
-                else ExportableAttentionLayer3d(_in_channels[0], num_heads, 128)
+                else ExportableAttentionLayer3d(_in_channels[0], _in_channels[0] // 64, 64)
             )
+        self.layers.append(UnetResidualLayer3d(_in_channels[0], _in_channels[0]))
         for i in range(num_layers):
             self.layers.append(UnetDecoderLayer3d(_in_channels[i], _out_channels[i]))
         self.layers.append(SpatialRMSNorm(base_channels))
@@ -299,8 +344,8 @@ class UnetDecoder3d(nn.Module):
             )
         )
 
-    def forward(self, voxel_inputs: Tensor) -> Tensor:
-        return self.layers(voxel_inputs)
+    def forward(self, input: Tensor) -> Tensor:
+        return self.layers(input)
 
 
 class Unet3d(nn.Module):

@@ -267,9 +267,8 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.radius_channels = radius_channels
         self.positional_embeds = nn.Embedding(10000, self.hidden_size)
         self.register_buffer("positional_ids", torch.arange(10000).view(1, -1).long())
-        self.k_encoder = Transformer(self.hidden_size, 6, self.hidden_size // 64, 64, max_seq_length=10000)
-        self.v_encoder = Transformer(self.hidden_size, 6, self.hidden_size // 64, 64, max_seq_length=10000)
-        self.decoder = Transformer(self.hidden_size, 6, self.hidden_size // 64, 64, max_seq_length=10000)
+        self.encoder = Transformer(self.hidden_size, 12, self.hidden_size // 64, 64, max_seq_length=10000)
+        self.decoder = ConditionalTransformer(self.hidden_size, 12, self.hidden_size // 64, 64, max_seq_length=10000)
         self.occ_norm = RMSNorm(self.hidden_size)
         self.nonlinear = nn.SiLU(True)
         self.occ_proj = nn.Linear(self.hidden_size, 4)
@@ -278,21 +277,13 @@ class MultiViewImageToVoxelModel(nn.Module):
         seq_len = out_shape[0] * out_shape[1] * out_shape[2]
         q = self.positional_embeds(self.positional_ids[:, :seq_len])
         q = q.expand(multiview.shape[0], -1, -1)
-        k = self.k_encoder(multiview)
-        v = self.v_encoder(multiview)
-
-        q = q.view(q.shape[0], q.shape[1], -1, 64).transpose(1, 2)
-        k = k.view(k.shape[0], k.shape[1], -1, 64).transpose(1, 2)
-        v = v.view(v.shape[0], v.shape[1], -1, 64).transpose(1, 2)
-
-        out = F.scaled_dot_product_attention(q, k, v)
-        out = out.transpose(1, 2).flatten(2)
-        occ_latent = self.decoder(out)
+        kv = self.encoder(multiview)
+        occ_latent = self.decoder(q, kv)
 
         occ_latent = self.occ_norm(occ_latent)
         occ_latent = self.nonlinear(occ_latent)
         occ_latent = self.occ_proj(occ_latent)
-        occ_latent = occ_latent.transpose(1, 2).reshape(out.shape[0], -1, *out_shape)
+        occ_latent = occ_latent.transpose(1, 2).reshape(occ_latent.shape[0], -1, *out_shape)
         return occ_latent
 
 
@@ -420,7 +411,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             loss = F.binary_cross_entropy_with_logits(
                 pred_occ,
                 input.occupancy,
-                pos_weight=torch.tensor(100, device=pred_occ.device, dtype=pred_occ.dtype),
+                pos_weight=torch.tensor(9, device=pred_occ.device, dtype=pred_occ.dtype),
                 reduction="none",
             )
         else:

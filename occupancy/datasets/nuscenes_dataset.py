@@ -134,9 +134,10 @@ class NuScenesPointCloud:
     ) -> Tensor:
         points = points / 0.5
 
-        rot = R.from_euler("z", 90, degrees=True).as_matrix()
-        rot = torch.from_numpy(rot).to(torch.float32).to(points.device)
-        points[:3] = torch.matmul(rot, points[:3].type(torch.float32)).type_as(points)
+        # rot = R.from_euler("z", 90, degrees=True).as_matrix()
+        # rot = torch.from_numpy(rot).to(torch.float32).to(points.device)
+        # points[:3] = torch.matmul(rot, points[:3].type(torch.float32)).type_as(points)
+
         return ops.voxelize(
             points,
             values.to(torch.bfloat16),
@@ -153,6 +154,7 @@ class NuScenesPointCloud:
             y_offset,
             z_offset,
             ignore_index,
+            num_classes=2,
         ).to(torch.uint8)
 
     @classmethod
@@ -164,6 +166,19 @@ class NuScenesPointCloud:
         return torch.from_numpy(np.load(file)["data"].astype(np.uint8))
 
     @classmethod
+    def _load_from_raw(cls, meta: dict) -> Tensor:
+        lidar = cls._load_lidar(meta["filename"])
+        panoptic = cls._load_panoptic(meta["panoptic"]["filename"])
+        rotation = roma.quat_wxyz_to_xyzw(torch.as_tensor(meta["rotation"]))
+        points = lidar[:, :3]
+        points = roma.quat_action(rotation[None, ...].expand(points.shape[0], -1), points).t()
+        panoptic = panoptic[None, :] > 0
+        panoptic = panoptic.type(torch.long)
+        voxel = cls._pointcloud_to_voxelgrid(points, panoptic)
+
+        return points, panoptic, voxel[None, ...]
+
+    @classmethod
     def _load_full_size_occupancy(
         cls, path: str, binary: bool = True, rotate: Optional[Tensor] = None, observable: bool = True
     ) -> Tensor:
@@ -173,16 +188,15 @@ class NuScenesPointCloud:
         # is_flat = points[3] == 11
         # ind = torch.where(is_flat)[0]
         # other_ind = torch.where(~is_flat)[0]
-        # sample_ind = ind[torch.randperm(ind.shape[0])[: int(ind.shape[0] * 0.5)]]  # type: ignore
-        # total_ind = torch.cat([sample_ind, other_ind])
+        sample_ind = torch.randperm(points.shape[1])[: int(points.shape[1] * 0.5)]
 
-        # points = points[:, other_ind]
+        points = points[:, sample_ind]
         if observable:
             norm_p = points[[2, 1, 0]].float()
             norm_p[0] = (norm_p[0] - 256) / 256
             norm_p[1] = (norm_p[1] - 256) / 256
-            norm_p[2] = (norm_p[2] - 20) / 20
-            final_ind = ops.filter_observable(norm_p, 1, 1)
+            norm_p[2] = (norm_p[2] - 25) / 20
+            final_ind = ops.filter_observable(norm_p, 0.5, 5)
             points = points[:, final_ind]
         if rotate is not None:
             xyz = points[[2, 1, 0]].clone()
@@ -199,7 +213,7 @@ class NuScenesPointCloud:
             points = points[:, valid]
 
         attrs = points[3].type(torch.long) + 1
-        voxel = torch.zeros(512, 512, 64, dtype=torch.long)
+        voxel = torch.zeros(512, 512, 40, dtype=torch.long)
         voxel[points[2].long(), points[1].long(), points[0].long()] = attrs
 
         if binary:
@@ -208,6 +222,9 @@ class NuScenesPointCloud:
         else:
             voxel = F.one_hot(voxel, num_classes=18).permute(3, 0, 1, 2)
             voxel = voxel[None, ...].bool()
+        # voxel = F.interpolate(voxel.float(), scale_factor=2, mode="trilinear", align_corners=True).bool()
+        # voxel = voxel[..., 256:-256, 256:-256, 12 : 12 + 64]
+
         return points, attrs[None, ...], voxel
 
     @classmethod
@@ -222,10 +239,10 @@ class NuScenesPointCloud:
         points, attrs, occ = cls._load_full_size_occupancy(path, binary, rotate, observable)
         if scale_factor is not None and scale_factor != 1.0:
             if binary:
-                occ = F.interpolate(occ.float(), scale_factor=scale_factor, mode="trilinear", align_corners=True).bool()
+                occ = F.interpolate(occ.float(), size=(256, 256, 32), mode="trilinear", align_corners=True).bool()
             else:
                 occ = occ.float()
-                occ = F.interpolate(occ, scale_factor=0.5, mode="trilinear", align_corners=True).argmax(dim=1)
+                occ = F.interpolate(occ, size=(256, 256, 32), mode="trilinear", align_corners=True).argmax(dim=1)
                 occ = F.one_hot(occ, num_classes=18).permute(0, 4, 1, 2, 3).bool()
         return points, attrs, occ
 
@@ -234,6 +251,7 @@ class NuScenesPointCloud:
         cls, metadata: dict, binary: bool = True, scale_factor: Optional[float] = None, rotate: Optional[Tensor] = None
     ) -> "NuScenesPointCloud":
         sample_token = metadata["sample_token"]
+        # location, panoptic, occupancy = cls._load_from_raw(metadata)
         location, panoptic, occupancy = cls._load_occupancy(metadata["occupancy"], binary, scale_factor, rotate)
         location = MemoryMappedTensor.from_tensor(location[None, ...])
         panoptic = MemoryMappedTensor.from_tensor(panoptic[None, ...])

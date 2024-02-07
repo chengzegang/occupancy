@@ -20,8 +20,16 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.hidden_size = hidden_size
         self.eps = eps
-        self.weight = nn.Parameter(torch.ones(hidden_size, dtype=torch.bfloat16))
-        self.bias = nn.Parameter(torch.zeros(hidden_size, dtype=torch.bfloat16))
+        self.weight = nn.Parameter(
+            torch.ones(
+                hidden_size,
+            )
+        )
+        self.bias = nn.Parameter(
+            torch.zeros(
+                hidden_size,
+            )
+        )
 
     def forward(self, x: Tensor) -> Tensor:
         return fused_rmsnorm(x, self.weight, self.bias, self.eps)  # eps of bfloat16
@@ -50,17 +58,14 @@ class SwiGLU(nn.Module):
         self.w1 = nn.Linear(
             in_features,
             hidden_features,
-            dtype=torch.bfloat16,
         )
         self.w2 = nn.Linear(
             in_features,
             hidden_features,
-            dtype=torch.bfloat16,
         )
         self.w3 = nn.Linear(
             hidden_features,
             out_features,
-            dtype=torch.bfloat16,
         )
         self.hidden_features = hidden_features
         self.out_features = out_features
@@ -102,7 +107,7 @@ class RotaryEmbedding(torch.nn.Module):
         self.register_buffer("_sin_cached", s_sin_cached, persistent=False)
 
     def _update_cos_sin_tables(self, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        t = torch.arange(seq_len, dtype=torch.bfloat16, requires_grad=False)
+        t = torch.arange(seq_len, requires_grad=False)
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)
         _cos_cached = emb.cos()[None, None, :, :]
@@ -123,7 +128,7 @@ def _naive_scaled_dot_product_flash_attention(Q: Tensor, K: Tensor, V: Tensor) -
 
 
 class Attention(nn.Module):
-    def __init__(self, hidden_states: int, num_heads: int, head_size: int, max_seq_length: int = 65536):
+    def __init__(self, hidden_states: int, num_heads: int, head_size: int, max_seq_length: int = 10000):
         super().__init__()
         self.hidden_states = hidden_states
         self.num_heads = num_heads
@@ -132,22 +137,18 @@ class Attention(nn.Module):
         self.q_proj = nn.Linear(
             hidden_states,
             num_heads * head_size,
-            dtype=torch.bfloat16,
         )
         self.k_proj = nn.Linear(
             hidden_states,
             num_heads * head_size,
-            dtype=torch.bfloat16,
         )
         self.v_proj = nn.Linear(
             hidden_states,
             num_heads * head_size,
-            dtype=torch.bfloat16,
         )
         self.out_proj = nn.Linear(
             num_heads * head_size,
             hidden_states,
-            dtype=torch.bfloat16,
         )
         self.rotary = RotaryEmbedding(head_size, max_seq_length)
 
@@ -172,7 +173,7 @@ class Attention(nn.Module):
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, hidden_states: int, num_heads: int, head_size: int, max_seq_length: int = 65536):
+    def __init__(self, hidden_states: int, num_heads: int, head_size: int, max_seq_length: int = 10000):
         super().__init__()
         self.hidden_states = hidden_states
         self.num_heads = num_heads
@@ -181,22 +182,18 @@ class CrossAttention(nn.Module):
         self.q_proj = nn.Linear(
             hidden_states,
             num_heads * head_size,
-            dtype=torch.bfloat16,
         )
         self.k_proj = nn.Linear(
             hidden_states,
             num_heads * head_size,
-            dtype=torch.bfloat16,
         )
         self.v_proj = nn.Linear(
             hidden_states,
             num_heads * head_size,
-            dtype=torch.bfloat16,
         )
         self.out_proj = nn.Linear(
             num_heads * head_size,
             hidden_states,
-            dtype=torch.bfloat16,
         )
         self.rotary = RotaryEmbedding(head_size, max_seq_length)
 
@@ -225,7 +222,7 @@ class CrossAttention(nn.Module):
 
 
 class DecoderLayer(nn.Module):
-    def __init__(self, hidden_size: int, num_heads: int, head_size: int, max_seq_length: int = 65536):
+    def __init__(self, hidden_size: int, num_heads: int, head_size: int, max_seq_length: int = 10000):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
@@ -251,7 +248,7 @@ class DecoderLayer(nn.Module):
 
 
 class ConditionalDecoderLayer(nn.Module):
-    def __init__(self, hidden_size: int, num_heads: int, head_size: int, max_seq_length: int = 65536):
+    def __init__(self, hidden_size: int, num_heads: int, head_size: int, max_seq_length: int = 10000):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
@@ -322,7 +319,7 @@ class ConditionalTransformer(nn.Module):
         num_layers: int,
         num_heads: int,
         head_size: int,
-        max_seq_length: int = 65536,
+        max_seq_length: int = 10000,
     ):
         super().__init__()
         self.hidden_size = hidden_size
