@@ -267,8 +267,8 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.radius_channels = radius_channels
         self.positional_embeds = nn.Embedding(10000, self.hidden_size)
         self.register_buffer("positional_ids", torch.arange(10000).view(1, -1).long())
-        self.encoder = Transformer(self.hidden_size, 12, self.hidden_size // 64, 64, max_seq_length=65536)
-        self.decoder = ConditionalTransformer(self.hidden_size, 12, self.hidden_size // 64, 64, max_seq_length=65536)
+        self.encoder = Transformer(self.hidden_size, 8, self.hidden_size // 64, 64, max_seq_length=65536)
+        self.decoder = ConditionalTransformer(self.hidden_size, 8, self.hidden_size // 64, 64, max_seq_length=65536)
         self.occ_norm = RMSNorm(self.hidden_size)
         self.nonlinear = nn.SiLU(True)
         self.occ_proj = nn.Linear(self.hidden_size, 4)
@@ -411,7 +411,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             loss = F.binary_cross_entropy_with_logits(
                 pred_occ,
                 input.occupancy,
-                pos_weight=torch.tensor(9, device=pred_occ.device, dtype=pred_occ.dtype),
+                pos_weight=torch.tensor(4, device=pred_occ.device, dtype=pred_occ.dtype),
                 reduction="none",
             )
         else:
@@ -492,6 +492,7 @@ def config_model(args):
     model.voxel_autoencoderkl.requires_grad_(False)
     # model.image_autoencoderkl.requires_grad_(False)
     model.image_feature.requires_grad_(False)
+    model.decoder.positional_embeds.requires_grad_(False)
     # model.decoder.positional_embeds.requires_grad_(False)
     return model, MultiViewImageToVoxelPipelineInput.from_nuscenes_dataset_item
 
