@@ -175,8 +175,8 @@ class NuScenesPointCloud:
         points = roma.quat_action(rotation[None, ...], points.double()).t()
         panoptic = panoptic[None, :] > 0
         panoptic = panoptic.type(torch.long)
-        points[0] = points[0] / 0.5
-        points[1] = points[1] / 0.5
+        points[0] = points[0] / 0.25
+        points[1] = points[1] / 0.25
         #points[2] = points[2] * (32 / 20)
         voxel = cls._pointcloud_to_voxelgrid(points, panoptic)
 
