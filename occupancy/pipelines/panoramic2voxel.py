@@ -411,7 +411,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             loss = F.binary_cross_entropy_with_logits(
                 pred_occ,
                 input.occupancy,
-                pos_weight=torch.tensor(4, device=pred_occ.device, dtype=pred_occ.dtype),
+                pos_weight=torch.tensor(8, device=pred_occ.device, dtype=pred_occ.dtype),
                 reduction="none",
             )
         else:
