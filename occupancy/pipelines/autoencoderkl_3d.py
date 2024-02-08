@@ -306,15 +306,15 @@ class AutoEncoderKL3d(nn.Module):
 
 
 def load_model(model, path, partial=True):
-    state_dict = torch.load(path, mmap=True)
+    state_dict = torch.load(path)
     if partial:
         partial_states = model.state_dict()
         for key in partial_states.keys():
             if partial_states[key].shape == state_dict[key].shape:
                 partial_states[key] = state_dict[key]
-        model.load_state_dict(partial_states, strict=False, assign=True)
+        model.load_state_dict(partial_states, strict=False)
     else:
-        model.load_state_dict(state_dict, strict=False, assign=True)
+        model.load_state_dict(state_dict, strict=False)
     return model
 
 

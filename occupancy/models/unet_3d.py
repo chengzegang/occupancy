@@ -151,7 +151,7 @@ class UnetResidualLayer3d(nn.Module):
             out_channels,
             kernel_size=1,
         )
-        self.nonlinear = nn.SiLU(True)
+        self.nonlinear = nn.SiLU()
 
     def forward(self, input_embeds: Tensor) -> Tensor:
         residual = self.shorcut(input_embeds)
@@ -193,7 +193,7 @@ class UnetEncoderLayer3d(nn.Module):
             kernel_size=2,
             stride=2,
         )
-        self.nonlinear = nn.SiLU(True)
+        self.nonlinear = nn.SiLU()
 
     def forward(self, input_embeds: Tensor) -> Tensor:
         residual = self.shorcut(input_embeds)
@@ -244,7 +244,7 @@ class UnetEncoder3d(nn.Module):
                 else ExportableAttentionLayer3d(_out_channels[-1], _out_channels[-1] // 64, 64)
             )
         self.layers.append(SpatialRMSNorm(_out_channels[-1]))
-        self.layers.append(nn.SiLU(True))
+        self.layers.append(nn.SiLU())
         self.layers.append(
             nn.Conv3d(
                 _out_channels[-1],
@@ -285,7 +285,7 @@ class UnetDecoderLayer3d(nn.Module):
             kernel_size=2,
             stride=2,
         )
-        self.nonlinear = nn.SiLU(True)
+        self.nonlinear = nn.SiLU()
 
     def forward(self, input_embeds: Tensor) -> Tensor:
         residual = self.shorcut(input_embeds)
@@ -335,7 +335,7 @@ class UnetDecoder3d(nn.Module):
         for i in range(num_layers):
             self.layers.append(UnetDecoderLayer3d(_in_channels[i], _out_channels[i]))
         self.layers.append(SpatialRMSNorm(base_channels))
-        self.layers.append(nn.SiLU(True))
+        self.layers.append(nn.SiLU())
         self.layers.append(
             nn.Conv3d(
                 base_channels,

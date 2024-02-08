@@ -204,7 +204,7 @@ class MultiViewImageToVoxelPipelineOutput:
         ax = fig.add_subplot(1, 2, 1, projection="3d")
         ax.scatter(i, j, k, c=c, s=1, marker="s", alpha=0.8)
         ax.set_title("Ground Truth")
-        ax.set_box_aspect((1, 1, 40 / 512))
+        ax.set_box_aspect((1, 1, 40 / 256))
         ax.set_xlim(0, self.ground_truth.shape[-3])
         ax.set_ylim(0, self.ground_truth.shape[-2])
         ax.set_zlim(0, self.ground_truth.shape[-1])
@@ -213,7 +213,7 @@ class MultiViewImageToVoxelPipelineOutput:
         ax = fig.add_subplot(1, 2, 2, projection="3d")
         ax.scatter(ih, jh, kh, c=ch, s=1, marker="s", alpha=0.8)
         ax.set_title("Prediction")
-        ax.set_box_aspect((1, 1, 40 / 512))
+        ax.set_box_aspect((1, 1, 40 / 256))
         ax.set_xlim(0, self.ground_truth.shape[-3])
         ax.set_ylim(0, self.ground_truth.shape[-2])
         ax.set_zlim(0, self.ground_truth.shape[-1])
@@ -349,6 +349,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             2,
             3,
         )
+        
         self.image_augmentation = ImageAugmentation()
         torch.hub.set_dir(os.path.join(os.curdir, ".torch"))
         self.image_feature = torch.hub.load(
@@ -401,7 +402,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
                 input.images.data = self.image_augmentation(input.images.data.float()).type_as(input.images.data)
                 input.images.data = input.images.data[:, torch.randperm(input.images.shape[1])]
                 # gt_occ = self.voxel_autoencoderkl.encode(input.occupancy).sample()
-        model_output = self.decode(input.images, (32, 32, 4))
+        model_output = self.decode(input.images, (32, 32, 5))
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
         pos_weight = self.influence_radial_weight(input.occupancy)
         # latent_loss = F.mse_loss(model_output, gt_occ)
@@ -471,25 +472,24 @@ def config_model(args):
         model.load_state_dict(
             torch.load(
                 path,
-                mmap=True,
             ),
-            assign=True,
         )
     except Exception as e:
         print(f"Failed to load pipeline: {e}")
     model.voxel_autoencoderkl.load_state_dict(
         torch.load(
             os.path.join(args.save_dir, f"autoencoderkl-cls{args.num_classes}.pt"),
-            mmap=True,
         ),
-        assign=True,
-        strict=False,
     )
 
     model.to(dtype=args.dtype, device=args.device, non_blocking=True)
     model.voxel_autoencoderkl.encoder = torch.jit.script(model.voxel_autoencoderkl.encoder)
     model.voxel_autoencoderkl.decoder = torch.jit.script(model.voxel_autoencoderkl.decoder)
+    
     model.voxel_autoencoderkl.requires_grad_(False)
+    model.voxel_autoencoderkl.encoder = torch.compile(model.voxel_autoencoderkl.encoder, fullgraph=True, dynamic=False, backend='nvprims_nvfuser')
+    model.voxel_autoencoderkl.decoder = torch.compile(model.voxel_autoencoderkl.decoder, fullgraph=True, dynamic=False, backend='nvprims_nvfuser')
+    model.decoder.decoder = torch.compile(torch.jit.script(model.decoder.decoder), fullgraph=True, dynamic=False, backend='aot_ts_nvfuser')
     # model.image_autoencoderkl.requires_grad_(False)
     model.image_feature.requires_grad_(False)
     model.decoder.positional_embeds.requires_grad_(False)

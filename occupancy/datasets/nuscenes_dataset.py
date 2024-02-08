@@ -8,7 +8,12 @@ from torch.utils.data import Dataset
 import os
 from PIL import Image as PILImage
 from torch import Tensor
-from tensordict import tensorclass, MemoryMappedTensor
+import tensordict
+from tensordict import tensorclass
+if 'MemoryMappedTensor' not in tensordict.__all__:
+    from tensordict import MemmapTensor as MemoryMappedTensor
+else:
+    from tensordict import MemoryMappedTensor
 from nuscenes import NuScenes
 import numpy as np
 from torch.utils.data._utils.collate import default_collate_fn_map
@@ -19,7 +24,8 @@ import roma
 from scipy.spatial.transform import Rotation as R
 import torch.nn.functional as F
 from occupancy import ops
-
+import torchvision
+torchvision.disable_beta_transforms_warning()
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
@@ -36,7 +42,7 @@ class NuScenesImage:
         path = metadata["filename"]
         sample_token = metadata["sample_token"]
         data = TF.pil_to_tensor(PILImage.open(path))
-        data = TF.to_dtype(data, torch.float32, scale=True)
+        data = data.float() / 255.0
         data = TF.resize(data, size=(data.size(-2) // 2, data.size(-1) // 2), antialias=True)
         data = MemoryMappedTensor.from_tensor(data)
         rotation = MemoryMappedTensor.from_tensor(roma.quat_wxyz_to_xyzw(torch.as_tensor(metadata["rotation"])))
@@ -83,9 +89,9 @@ class NuScenesPointCloud:
     @classmethod
     def collate_fn(cls, batch, *, collate_fn_map=None):
         max_len = max([b.location.shape[-1] for b in batch])
-        location = torch.cat([b._pad_sequence(b.location, max_len) for b in batch])
-        attribute = torch.cat([b._pad_sequence(b.attribute, max_len) for b in batch])
-        occupancy = torch.cat([b.occupancy for b in batch])
+        location = torch.cat([b._pad_sequence(b.location, max_len) for b in batch], dim=0)
+        attribute = torch.cat([b._pad_sequence(b.attribute, max_len) for b in batch], dim=0)
+        occupancy = torch.cat([b.occupancy for b in batch], dim=0)
         sample_token = [b.sample_token for b in batch]
         return cls(
             location,
@@ -122,14 +128,14 @@ class NuScenesPointCloud:
         x_max: int = 128,
         y_min: int = -128,
         y_max: int = 128,
-        z_min: int = -16,
-        z_max: int = 16,
+        z_min: int = -20,
+        z_max: int = 20,
         x_size: int = 256,
         y_size: int = 256,
-        z_size: int = 32,
+        z_size: int = 40,
         x_offset: int = 128,
         y_offset: int = 128,
-        z_offset: int = 16,
+        z_offset: int = 20,
         ignore_index: int = 0,
     ) -> Tensor:
         return ops.voxelize(
@@ -169,9 +175,9 @@ class NuScenesPointCloud:
         points = roma.quat_action(rotation[None, ...], points.double()).t()
         panoptic = panoptic[None, :] > 0
         panoptic = panoptic.type(torch.long)
-        points[0] = points[0] / 0.25
-        points[1] = points[1] / 0.25
-        points[2] = points[2] / 0.25
+        points[0] = points[0] / 0.5
+        points[1] = points[1] / 0.5
+        #points[2] = points[2] * (32 / 20)
         voxel = cls._pointcloud_to_voxelgrid(points, panoptic)
 
         return points, panoptic, voxel[None, ...]

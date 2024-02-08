@@ -349,7 +349,7 @@ class AveragePooling(nn.Module):
         self.pooling = nn.Conv1d(hidden_size, hidden_size, 2, 2)
         self.norm = RMSNorm(hidden_size)
         self.linear = nn.Linear(hidden_size, hidden_size)
-        self.nonlinear = nn.SiLU(True)
+        self.nonlinear = nn.SiLU()
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.pooling(x.transpose(-1, -2)).transpose(-1, -2)
