@@ -487,9 +487,6 @@ def config_model(args):
     model.voxel_autoencoderkl.decoder = torch.jit.script(model.voxel_autoencoderkl.decoder)
     
     model.voxel_autoencoderkl.requires_grad_(False)
-    model.voxel_autoencoderkl.encoder = torch.compile(model.voxel_autoencoderkl.encoder, fullgraph=True, dynamic=False, backend='nvprims_nvfuser')
-    model.voxel_autoencoderkl.decoder = torch.compile(model.voxel_autoencoderkl.decoder, fullgraph=True, dynamic=False, backend='nvprims_nvfuser')
-    model.decoder.decoder = torch.compile(torch.jit.script(model.decoder.decoder), fullgraph=True, dynamic=False, backend='aot_ts_nvfuser')
     # model.image_autoencoderkl.requires_grad_(False)
     model.image_feature.requires_grad_(False)
     model.decoder.positional_embeds.requires_grad_(False)
