@@ -132,12 +132,6 @@ class NuScenesPointCloud:
         z_offset: int = 16,
         ignore_index: int = 0,
     ) -> Tensor:
-        points = points / 0.25
-
-        # rot = R.from_euler("z", 90, degrees=True).as_matrix()
-        # rot = torch.from_numpy(rot).to(torch.float32).to(points.device)
-        # points[:3] = torch.matmul(rot, points[:3].type(torch.float32)).type_as(points)
-
         return ops.voxelize(
             points,
             values.to(torch.bfloat16),
@@ -175,6 +169,9 @@ class NuScenesPointCloud:
         points = roma.quat_action(rotation[None, ...], points.double()).t()
         panoptic = panoptic[None, :] > 0
         panoptic = panoptic.type(torch.long)
+        points[0] = points[0] / 0.25
+        points[1] = points[1] / 0.25
+        points[2] = points[2] / 0.25
         voxel = cls._pointcloud_to_voxelgrid(points, panoptic)
 
         return points, panoptic, voxel[None, ...]
