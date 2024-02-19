@@ -262,12 +262,12 @@ class NuScenesPointCloud:
         cls, metadata: dict, binary: bool = True, scale_factor: Optional[float] = None, rotate: Optional[Tensor] = None
     ) -> "NuScenesPointCloud":
         sample_token = metadata["sample_token"]
-        location, panoptic, occupancy = cls._load_from_raw(metadata)
-        # rotation = metadata["rotation"]
-        # rotation = torch.from_numpy(rotation).to(torch.float32).unsqueeze(0)
-        # rotation = roma.quat_wxyz_to_xyzw(rotation)
-        # rotation = roma.unitquat_to_rotmat(rotation)[0]
-        # location, panoptic, occupancy = cls._load_occupancy(metadata["occupancy"], binary, scale_factor, rotation)
+        #location, panoptic, occupancy = cls._load_from_raw(metadata)
+        rotation = metadata["rotation"]
+        rotation = torch.from_numpy(rotation).to(torch.float32).unsqueeze(0)
+        rotation = roma.quat_wxyz_to_xyzw(rotation)
+        rotation = roma.unitquat_to_rotmat(rotation)[0]
+        location, panoptic, occupancy = cls._load_occupancy(metadata["occupancy"], binary, scale_factor, rotation)
         location = MemoryMappedTensor.from_tensor(location[None, ...])
         panoptic = MemoryMappedTensor.from_tensor(panoptic[None, ...])
         occupancy = MemoryMappedTensor.from_tensor(occupancy)
