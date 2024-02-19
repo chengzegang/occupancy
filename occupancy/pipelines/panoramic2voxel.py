@@ -21,7 +21,7 @@ from occupancy.datasets.nuscenes import (
 )
 import torch.multiprocessing as mp
 import torch.distributed as dist
-from occupancy.models.transformer import Transformer
+from occupancy.models.transformer import RMSNorm, SwiGLU, Transformer
 from occupancy.models.unet_attention_2d import UnetAttention2d, UnetAttentionEncoder2d
 from occupancy.models.unet_attention_3d import UnetAttention3d, UnetAttentionEncoder3d
 from occupancy.models.unet_conditional_attention_3d import (
@@ -342,6 +342,73 @@ MV2V_1B = {
 }
 
 
+class LinearCategoricalDeformationDetectionHead(nn.Module):
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        eps: float = 1e-5,
+        deformative_size: int = 256,
+        dtype: Optional[torch.dtype] = None,
+        device: Optional[torch.device] = None,
+    ):
+        """
+        Initializes a TransformerLayer module.
+
+        Args:
+            hidden_size (int): The size of the hidden state.
+            out_features (int): The number of output features.
+            deformative_size (int, optional): The size of the deformative tensor. Defaults to 256.
+            eps (float, optional): The epsilon value for RMSNorm. Defaults to 1e-5.
+            projection_norm_type (Literal["matrix_norm", "softmax"], optional): The type of normalization for the projection. Defaults to "softmax".
+            dtype (torch.dtype, optional): The data type of the tensors. Defaults to None.
+            device (torch.device, optional): The device to use for computation. Defaults to None.
+        """
+        super().__init__()
+        self.in_features = in_features
+        self.deformative_size = deformative_size
+        self.gate = SwiGLU(
+            in_features=in_features,
+            hidden_features=out_features * 8 // 3,
+            out_features=out_features,
+        )
+        self.left_proj = nn.Linear(out_features, deformative_size)
+
+        self.mlp_norm = RMSNorm(hidden_size=out_features)
+        self.mlp = SwiGLU(
+            in_features=out_features,
+            hidden_features=out_features * 8 // 3,
+            out_features=out_features,
+        )
+
+    def forward(self, input_embeds: Tensor) -> Tensor:
+        """
+        Performs a forward pass through the TransformerLayer module.
+
+        Args:
+            input_embeds (Tensor): The input embeddings.
+            attention_mask (Tensor, optional): The attention mask. Defaults to None.
+            is_causal (bool, optional): Whether the attention is causal or not. Defaults to False.
+
+        Returns:
+            Tensor: The output embeddings.
+        """
+        input_embeds = self.gate(input_embeds)
+        left_weight = self.left_proj(input_embeds)
+        left_weight = F.normalize(left_weight, p=2, dim=(-1, -2))
+        logits = torch.einsum("...ij,...ik->...kj", input_embeds, left_weight)
+
+        residual = logits
+        logits = self.mlp_norm(logits)
+        logits = self.mlp(logits)
+        logits = logits + residual
+
+        logits = logits / (torch.norm(logits, dim=-1, keepdim=True, p=2) / math.sqrt(logits.shape[-1]))
+        logits = logits.squeeze(1)
+        return logits
+
+
 class MultiViewImageToVoxelModel(nn.Module):
     def __init__(
         self,
@@ -357,46 +424,18 @@ class MultiViewImageToVoxelModel(nn.Module):
         self.in_channels = in_channels
         self.hidden_size = hidden_size
         self.radius_channels = radius_channels
-        self.encoder = UnetEncoder2d(4, self.hidden_size, base_channels, 2, 2)
-        self.grid_embeds = nn.Conv3d(3, self.hidden_size, 3, padding=1)
+        self.deformation = LinearCategoricalDeformationDetectionHead(hidden_size, 32 * 32 * 4)
         self.transformer = Transformer(self.hidden_size, num_layers, self.hidden_size // head_size, head_size)
         self.decoder = UnetConditionalAttentionDecoderWithoutShortcut3d(
             out_channels, self.hidden_size, self.hidden_size, base_channels, 2, 1, head_size
         )
-        self._last_shape = None
-        self._last_grid = None
-
-    def build_grid(
-        self, out_shape: Tuple[int, int, int], device: str | torch.device = "cpu", dtype: torch.dtype = torch.float32
-    ) -> Tensor:
-        i, j, k = torch.meshgrid(
-            torch.linspace(-1, 1, out_shape[0], device=device, dtype=dtype),
-            torch.linspace(-1, 1, out_shape[1], device=device, dtype=dtype),
-            torch.linspace(-1, 1, out_shape[2], device=device, dtype=dtype),
-            indexing="ij",
-        )
-        ijk = torch.stack([i, j, k], dim=0).unsqueeze(0)
-        ijk.requires_grad_(False)
-        return ijk
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
         multiview = torch.cat(multiview.unbind(1), dim=-1)
 
-        multiview_latent = self.encoder(multiview)
-        desired_shape = (out_shape[0] // 2, out_shape[1] // 2, out_shape[2] // 2)
-        desired_numel = desired_shape[0] * desired_shape[1] * desired_shape[2]
-        if self._last_shape != desired_shape:
-            self._last_shape = desired_shape
-            self._last_grid = self.build_grid(desired_shape, multiview.device, multiview.dtype)
-
-        grid_embeds = self.grid_embeds(self._last_grid.detach()).expand(multiview_latent.shape[0], -1, -1, -1, -1)
-        latent = torch.cat(
-            [grid_embeds.flatten(2).transpose(-1, -2), multiview_latent.flatten(2).transpose(-1, -2)], dim=1
-        )
+        latent = self.deformation(multiview.flatten(2).transpose(-1, -2))
         latent = self.transformer(latent)
-        occ_latent = latent[:, :desired_numel].transpose(-1, -2).view(latent.shape[0], -1, *desired_shape)
-        multiview_latent = latent[:, desired_numel:].transpose(-1, -2).view_as(multiview_latent)
-        output = self.decoder(occ_latent, multiview_latent)
+        output = latent.transpose(-1, -2).view_as(latent.shape[0], -1, *out_shape)
         return output
 
 
@@ -596,7 +635,7 @@ def config_model(args):
 
 
 def config_dataloader(args):
-    dataset = NuScenesDataset(args.data_dir)
+    dataset = NuScenesDataset(data_dir=args.data_dir)
     index = list(range(len(dataset)))[2000:]
     dataset = Subset(dataset, index)
     sampler = DistributedSampler(dataset) if args.ddp else None
