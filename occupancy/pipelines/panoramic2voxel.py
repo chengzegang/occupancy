@@ -24,7 +24,7 @@ from occupancy.datasets.nuscenes_dataset import (
 )
 import torch.multiprocessing as mp
 import torch.distributed as dist
-from occupancy.models.transformer import ConditionalTransformer, CrossAttention, RMSNorm, Transformer
+from occupancy.models.transformer import ConditionalTransformer, CrossAttention, RMSNorm, SwiGLU, Transformer
 from occupancy.models.unet_attention_2d import UnetAttention2d, UnetAttentionEncoder2d
 from occupancy.models.unet_attention_3d import UnetAttention3d, UnetAttentionEncoder3d
 from occupancy.models.unet_conditional_attention_3d import (
@@ -253,38 +253,97 @@ class MultiViewImageToVoxelConfig:
         # return cls(**config)
 
 
+class LinearCategoricalDeformationDetectionHead(nn.Module):
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        eps: float = 1e-5,
+        deformative_size: int = 256,
+        dtype: Optional[torch.dtype] = None,
+        device: Optional[torch.device] = None,
+    ):
+        """
+        Initializes a TransformerLayer module.
+
+        Args:
+            hidden_size (int): The size of the hidden state.
+            out_features (int): The number of output features.
+            deformative_size (int, optional): The size of the deformative tensor. Defaults to 256.
+            eps (float, optional): The epsilon value for RMSNorm. Defaults to 1e-5.
+            projection_norm_type (Literal["matrix_norm", "softmax"], optional): The type of normalization for the projection. Defaults to "softmax".
+            dtype (torch.dtype, optional): The data type of the tensors. Defaults to None.
+            device (torch.device, optional): The device to use for computation. Defaults to None.
+        """
+        super().__init__()
+        self.in_features = in_features
+        self.deformative_size = deformative_size
+        self.gate = SwiGLU(
+            in_features=in_features,
+            hidden_features=out_features * 8 // 3,
+            out_features=out_features,
+        )
+        self.left_proj = nn.Linear(out_features, deformative_size)
+
+        self.mlp_norm = RMSNorm(hidden_size=out_features)
+        self.mlp = SwiGLU(
+            in_features=out_features,
+            hidden_features=out_features * 8 // 3,
+            out_features=out_features,
+        )
+
+    def forward(self, input_embeds: Tensor) -> Tensor:
+        """
+        Performs a forward pass through the TransformerLayer module.
+
+        Args:
+            input_embeds (Tensor): The input embeddings.
+            attention_mask (Tensor, optional): The attention mask. Defaults to None.
+            is_causal (bool, optional): Whether the attention is causal or not. Defaults to False.
+
+        Returns:
+            Tensor: The output embeddings.
+        """
+        input_embeds = self.gate(input_embeds)
+        left_weight = self.left_proj(input_embeds)
+        left_weight = F.normalize(left_weight, p=2, dim=(-1, -2))
+        logits = torch.einsum("...ij,...ik->...kj", input_embeds, left_weight)
+
+        residual = logits
+        logits = self.mlp_norm(logits)
+        logits = self.mlp(logits)
+        logits = logits + residual
+
+        logits = logits / (torch.norm(logits, dim=-1, keepdim=True, p=2) / math.sqrt(logits.shape[-1]))
+        logits = logits.squeeze(1)
+        return logits
+
+
 class MultiViewImageToVoxelModel(nn.Module):
     def __init__(
         self,
         in_channels: int = 4,
         out_channels: int = 16,
-        radius_channels: int = 8,
-        **kwargs,
     ):
         super().__init__()
-        self.in_channels = in_channels
         self.hidden_size = 768
-        self.radius_channels = radius_channels
-        self.positional_embeds = nn.Embedding(10000, self.hidden_size)
-        self.register_buffer("positional_ids", torch.arange(10000).view(1, -1).long())
-        self.encoder = Transformer(self.hidden_size, 8, self.hidden_size // 64, 64, max_seq_length=65536)
-        self.decoder = ConditionalTransformer(self.hidden_size, 8, self.hidden_size // 64, 64, max_seq_length=65536)
-        self.occ_norm = RMSNorm(self.hidden_size)
-        self.nonlinear = nn.SiLU(True)
-        self.occ_proj = nn.Linear(self.hidden_size, 4)
+        self.in_channels = in_channels
+        self.deformation = LinearCategoricalDeformationDetectionHead(self.hidden_size, 32 * 32 * 4)
+        self.transformer = Transformer(self.hidden_size, 16, self.hidden_size // 64, 64)
+        self.out_norm = RMSNorm(self.hidden_size)
+        self.out_proj = nn.Linear(self.hidden_size, out_channels)
 
     def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
-        seq_len = out_shape[0] * out_shape[1] * out_shape[2]
-        q = self.positional_embeds(self.positional_ids[:, :seq_len])
-        q = q.expand(multiview.shape[0], -1, -1)
-        kv = self.encoder(multiview)
-        occ_latent = self.decoder(q, kv)
+        multiview = torch.cat(multiview.unbind(1), dim=-1)
 
-        occ_latent = self.occ_norm(occ_latent)
-        occ_latent = self.nonlinear(occ_latent)
-        occ_latent = self.occ_proj(occ_latent)
-        occ_latent = occ_latent.transpose(1, 2).reshape(occ_latent.shape[0], -1, *out_shape)
-        return occ_latent
+        latent = self.deformation(multiview.flatten(2).transpose(-1, -2))
+        latent = self.transformer(latent)
+        latent = self.out_norm(latent)
+        latent = F.silu(latent)
+        latent = self.out_proj(latent)
+        output = latent.transpose(-1, -2).view_as(latent.shape[0], -1, *out_shape)
+        return output
 
 
 def build_kernel(size: int, sigma: float) -> torch.Tensor:
@@ -349,7 +408,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             2,
             3,
         )
-        
+
         self.image_augmentation = ImageAugmentation()
         torch.hub.set_dir(os.path.join(os.curdir, ".torch"))
         self.image_feature = torch.hub.load(
@@ -361,7 +420,6 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         self.decoder = MultiViewImageToVoxelModel(
             4,
             self.voxel_encoder_latent_dim,
-            self.plane2polar_depth_channels,
         )
         self.voxel_autoencoderkl.requires_grad_(False)
 
@@ -485,7 +543,7 @@ def config_model(args):
     model.to(dtype=args.dtype, device=args.device, non_blocking=True)
     model.voxel_autoencoderkl.encoder = torch.jit.script(model.voxel_autoencoderkl.encoder)
     model.voxel_autoencoderkl.decoder = torch.jit.script(model.voxel_autoencoderkl.decoder)
-    
+
     model.voxel_autoencoderkl.requires_grad_(False)
     # model.image_autoencoderkl.requires_grad_(False)
     model.image_feature.requires_grad_(False)
