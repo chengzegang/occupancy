@@ -358,6 +358,7 @@ class BEVLinearCategoricalDeformation(nn.Module):
         self.attentions = nn.ModuleList(
             [ConditionalDecoderLayer(hidden_size, hidden_size // 64, 64) for _ in range(self.num_layers - 1)]
         )
+        self.transformer = Transformer(hidden_size, 8, hidden_size // 64, 64)
 
     def _bev_linear_categorical_deformation_hook(self, module, input, output):
         block_index = getattr(module, "_block_index")
@@ -377,6 +378,7 @@ class BEVLinearCategoricalDeformation(nn.Module):
         for i in x.unbind(1):
             self.feature_extrator(i)
         feat = self._last_feats.pop()
+        feat = self.transformer(feat)
         feat = feat.transpose(-1, -2).view_as(feat.shape[0], -1, 32, 32, 4)
         return feat
 
@@ -431,23 +433,6 @@ def occ_approx_roi(occ: Tensor) -> Tensor:
     mask = mask > 0
     mask = mask.any(dim=-1, keepdim=True).expand_as(mask)
     return mask
-
-
-class Bypass(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, patch_size: int):
-        super().__init__()
-        self.patch_embed = nn.Conv2d(in_channels, out_channels, patch_size, patch_size)
-        self.head = nn.Linear(out_channels, out_channels)
-        self.nonlinear = nn.SiLU(True)
-
-        self.head.weight.data.zero_()
-        self.head.bias.data.zero_()
-
-    def forward(self, x: Tensor) -> Tensor:
-        x = self.patch_embed(x).flatten(2).transpose(-1, -2)
-        x = self.nonlinear(x)
-        x = self.head(x)
-        return x
 
 
 class MultiViewImageToVoxelPipeline(nn.Module):
