@@ -473,6 +473,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         self.image_augmentation = ImageAugmentation()
         torch.hub.set_dir(os.path.join(os.curdir, ".torch"))
         dinov2 = torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14", trust_repo=True, skip_validation=True)
+        dinov2.requires_grad_(False)
         self.decoder = BEVLinearCategoricalDeformation(dinov2)
 
         # self.decoder = MultiViewImageToVoxelModel(
@@ -602,10 +603,9 @@ def config_model(args):
     model.to(dtype=args.dtype, device=args.device, non_blocking=True)
     model.voxel_autoencoderkl.encoder = torch.jit.script(model.voxel_autoencoderkl.encoder)
     model.voxel_autoencoderkl.decoder = torch.jit.script(model.voxel_autoencoderkl.decoder)
-
+    model.decoder.feature_extrator.requires_grad_(False)
     model.voxel_autoencoderkl.requires_grad_(False)
     # model.image_autoencoderkl.requires_grad_(False)
-    model.image_feature.requires_grad_(False)
     # model.decoder.positional_embeds.requires_grad_(False)
     return model, MultiViewImageToVoxelPipelineInput.from_nuscenes_dataset_item
 
