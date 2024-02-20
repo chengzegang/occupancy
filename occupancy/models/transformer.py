@@ -128,27 +128,27 @@ def _naive_scaled_dot_product_flash_attention(Q: Tensor, K: Tensor, V: Tensor) -
 
 
 class Attention(nn.Module):
-    def __init__(self, hidden_states: int, num_heads: int, head_size: int, max_seq_length: int = 10000):
+    def __init__(self, hidden_size: int, num_heads: int, head_size: int, max_seq_length: int = 10000):
         super().__init__()
-        self.hidden_states = hidden_states
+        self.hidden_states = hidden_size
         self.num_heads = num_heads
         self.head_size = head_size
 
         self.q_proj = nn.Linear(
-            hidden_states,
+            hidden_size,
             num_heads * head_size,
         )
         self.k_proj = nn.Linear(
-            hidden_states,
+            hidden_size,
             num_heads * head_size,
         )
         self.v_proj = nn.Linear(
-            hidden_states,
+            hidden_size,
             num_heads * head_size,
         )
         self.out_proj = nn.Linear(
             num_heads * head_size,
-            hidden_states,
+            hidden_size,
         )
         self.rotary = RotaryEmbedding(head_size, max_seq_length)
 

@@ -24,7 +24,15 @@ from occupancy.datasets.nuscenes_dataset import (
 )
 import torch.multiprocessing as mp
 import torch.distributed as dist
-from occupancy.models.transformer import ConditionalTransformer, CrossAttention, RMSNorm, SwiGLU, Transformer
+from occupancy.models.transformer import (
+    Attention,
+    ConditionalDecoderLayer,
+    ConditionalTransformer,
+    CrossAttention,
+    RMSNorm,
+    SwiGLU,
+    Transformer,
+)
 from occupancy.models.unet_attention_2d import UnetAttention2d, UnetAttentionEncoder2d
 from occupancy.models.unet_attention_3d import UnetAttention3d, UnetAttentionEncoder3d
 from occupancy.models.unet_conditional_attention_3d import (
@@ -253,7 +261,7 @@ class MultiViewImageToVoxelConfig:
         # return cls(**config)
 
 
-class LinearCategoricalDeformationDetectionHead(nn.Module):
+class LinearCategoricalDeformation(nn.Module):
 
     def __init__(
         self,
@@ -285,7 +293,8 @@ class LinearCategoricalDeformationDetectionHead(nn.Module):
             out_features=out_features,
         )
         self.left_proj = nn.Linear(out_features, deformative_size)
-
+        self.attn_norm = RMSNorm(hidden_size=out_features)
+        self.attention = Attention(hidden_size=out_features, num_heads=out_features // 64, head_size=64)
         self.mlp_norm = RMSNorm(hidden_size=out_features)
         self.mlp = SwiGLU(
             in_features=out_features,
@@ -307,17 +316,69 @@ class LinearCategoricalDeformationDetectionHead(nn.Module):
         """
         input_embeds = self.gate(input_embeds)
         left_weight = self.left_proj(input_embeds)
-        left_weight = F.normalize(left_weight, p=2, dim=(-1, -2))
+        left_weight = left_weight / (
+            torch.norm(left_weight, p=2, dim=(-1, -2)) / (left_weight.shape[-1] / left_weight.shape[-2])
+        )
         logits = torch.einsum("...ij,...ik->...kj", input_embeds, left_weight)
+
+        residual = logits
+        logits = self.attn_norm(logits)
+        logits = self.attention(logits)
+        logits = logits + residual
 
         residual = logits
         logits = self.mlp_norm(logits)
         logits = self.mlp(logits)
         logits = logits + residual
 
-        logits = logits / (torch.norm(logits, dim=-1, keepdim=True, p=2) / math.sqrt(logits.shape[-1]))
-        logits = logits.squeeze(1)
         return logits
+
+
+from collections import defaultdict
+
+
+class BEVLinearCategoricalDeformation(nn.Module):
+    def __init__(self, feature_extrator):
+        super().__init__()
+        self.feature_extrator = feature_extrator
+        for i, block in enumerate(self.feature_extrator.blocks):
+            setattr(block, "_block_index", i)
+            block.register_forward_hook(self._bev_linear_categorical_deformation_hook)
+        hidden_size = 768
+        df_size = 32 * 32 * 4
+        self.num_layers = len(self.feature_extrator.blocks)
+        self._bev_features = defaultdict(list)
+        self._last_feats = [None for _ in range(self.num_layers)]
+        self.deformations = nn.ModuleList(
+            [
+                LinearCategoricalDeformation(hidden_size, hidden_size, deformative_size=df_size)
+                for _ in range(self.num_layers)
+            ]
+        )
+        self.attentions = nn.ModuleList(
+            [ConditionalDecoderLayer(hidden_size, hidden_size // 64, 64) for _ in range(self.num_layers - 1)]
+        )
+
+    def _bev_linear_categorical_deformation_hook(self, module, input, output):
+        block_index = getattr(module, "_block_index")
+        df_feat = self.deformations[block_index](output)
+        self._bev_features[block_index].append(df_feat)
+        if len(self._bev_features[block_index]) == 6:
+            bev_feat = sum(self._bev_features[block_index])
+            self._last_feats[block_index] = bev_feat
+            self._bev_features[block_index] = []
+            if block_index > 0:
+                self._last_feats[block_index] = self.attentions[block_index - 1](
+                    self._last_feats[block_index - 1], self._last_feats[block_index]
+                )
+                self._last_feats[block_index - 1] = None
+
+    def forward(self, x: Tensor) -> Tensor:
+        for i in x.unbind(1):
+            self.feature_extrator(i)
+        feat = self._last_feats.pop()
+        feat = feat.transpose(-1, -2).view_as(feat.shape[0], -1, 32, 32, 4)
+        return feat
 
 
 class MultiViewImageToVoxelModel(nn.Module):
@@ -329,7 +390,7 @@ class MultiViewImageToVoxelModel(nn.Module):
         super().__init__()
         self.hidden_size = 768
         self.in_channels = in_channels
-        self.deformation = LinearCategoricalDeformationDetectionHead(self.hidden_size, 32 * 32 * 4)
+        self.deformation = LinearCategoricalDeformation(self.hidden_size, 32 * 32 * 4)
         self.transformer = Transformer(self.hidden_size, 16, self.hidden_size // 64, 64)
         self.out_norm = RMSNorm(self.hidden_size)
         self.out_proj = nn.Linear(self.hidden_size, out_channels)
@@ -411,42 +472,40 @@ class MultiViewImageToVoxelPipeline(nn.Module):
 
         self.image_augmentation = ImageAugmentation()
         torch.hub.set_dir(os.path.join(os.curdir, ".torch"))
-        self.image_feature = torch.hub.load(
-            "facebookresearch/dinov2", "dinov2_vitb14", trust_repo=True, skip_validation=True
-        )
+        dinov2 = torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14", trust_repo=True, skip_validation=True)
+        self.decoder = BEVLinearCategoricalDeformation(dinov2)
 
-        self.bypass = Bypass(3, 768, 14)
-
-        self.decoder = MultiViewImageToVoxelModel(
-            4,
-            self.voxel_encoder_latent_dim,
-        )
+        # self.decoder = MultiViewImageToVoxelModel(
+        #    4,
+        #    self.voxel_encoder_latent_dim,
+        # )
         self.voxel_autoencoderkl.requires_grad_(False)
 
-    def decode(self, images, voxel_shape) -> Tensor:
+    def decode(self, images) -> Tensor:
         B, V, C, H, W = images.shape
-        with torch.no_grad():
-            images = images.flatten(0, 1)
-            h = math.ceil(images.shape[-2] / 14) * 14
-            w = math.ceil(images.shape[-1] / 14) * 14
-            left_pad = (w - images.shape[-1]) // 2
-            right_pad = w - images.shape[-1] - left_pad
-            top_pad = (h - images.shape[-2]) // 2
-            bottom_pad = h - images.shape[-2] - top_pad
-            images = F.pad(images, (left_pad, right_pad, top_pad, bottom_pad))
-            images = TF.normalize(images, [123.675, 116.28, 103.53], [58.395, 57.12, 57.375])
-            chunks = images.unfold(-2, 224, 224).unfold(-2, 224, 224).reshape(-1, 3, 224, 224)
-            chunks = chunks.split(1, 0)
-            features: Tensor = torch.cat(
-                [self.image_feature.forward_features(chk)["x_norm_patchtokens"] for chk in chunks], dim=0
-            )
-            features = features.reshape(B, -1, features.shape[-1])
-        patches: Tensor = torch.cat([self.bypass(chk) for chk in chunks], dim=0)
-        patches = patches.reshape(B, -1, patches.shape[-1])
-        features = features + patches
-
-        multiview_latent = self.decoder(features, voxel_shape)
-        return multiview_latent
+        images = F.interpolate(images.flatten(0, 1), (224, 224), mode="bilinear", align_corners=False)
+        images = TF.normalize(images, [123.675, 116.28, 103.53], [58.395, 57.12, 57.375]).reshape(B, V, C, 224, 224)
+        pred_occ = self.decoder(images)
+        # with torch.no_grad():
+        #    images = images.flatten(0, 1)
+        #    h = math.ceil(images.shape[-2] / 14) * 14
+        #    w = math.ceil(images.shape[-1] / 14) * 14
+        #    left_pad = (w - images.shape[-1]) // 2
+        #    right_pad = w - images.shape[-1] - left_pad
+        #    top_pad = (h - images.shape[-2]) // 2
+        #    bottom_pad = h - images.shape[-2] - top_pad
+        #    images = F.pad(images, (left_pad, right_pad, top_pad, bottom_pad))
+        #    images = TF.normalize(images, [123.675, 116.28, 103.53], [58.395, 57.12, 57.375])
+        #    chunks = images.unfold(-2, 224, 224).unfold(-2, 224, 224).reshape(-1, 3, 224, 224)
+        #    chunks = chunks.split(1, 0)
+        #    features: Tensor = torch.cat([self.decoder(chk)["x_norm_patchtokens"] for chk in chunks], dim=0)
+        #    features = features.reshape(B, -1, features.shape[-1])
+        # patches: Tensor = torch.cat([self.bypass(chk) for chk in chunks], dim=0)
+        # patches = patches.reshape(B, -1, patches.shape[-1])
+        # features = features + patches
+        #
+        # multiview_latent = self.decoder(features, voxel_shape)
+        return pred_occ
 
     def parameters(self, recurse: bool = True) -> Iterator[Parameter]:
         return chain(self.decoder.parameters(recurse), self.bypass.parameters(recurse))
@@ -460,7 +519,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
                 input.images.data = self.image_augmentation(input.images.data.float()).type_as(input.images.data)
                 input.images.data = input.images.data[:, torch.randperm(input.images.shape[1])]
                 # gt_occ = self.voxel_autoencoderkl.encode(input.occupancy).sample()
-        model_output = self.decode(input.images, (32, 32, 5))
+        model_output = self.decode(input.images)
         pred_occ = self.voxel_autoencoderkl.decode(model_output)
         pos_weight = self.influence_radial_weight(input.occupancy)
         # latent_loss = F.mse_loss(model_output, gt_occ)
@@ -470,7 +529,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             loss = F.binary_cross_entropy_with_logits(
                 pred_occ,
                 input.occupancy,
-                pos_weight=torch.tensor(8, device=pred_occ.device, dtype=pred_occ.dtype),
+                pos_weight=torch.tensor(4, device=pred_occ.device, dtype=pred_occ.dtype),
                 reduction="none",
             )
         else:
