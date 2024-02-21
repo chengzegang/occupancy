@@ -10,7 +10,8 @@ from PIL import Image as PILImage
 from torch import Tensor
 import tensordict
 from tensordict import tensorclass
-if 'MemoryMappedTensor' not in tensordict.__all__:
+
+if "MemoryMappedTensor" not in tensordict.__all__:
     from tensordict import MemmapTensor as MemoryMappedTensor
 else:
     from tensordict import MemoryMappedTensor
@@ -25,6 +26,7 @@ from scipy.spatial.transform import Rotation as R
 import torch.nn.functional as F
 from occupancy import ops
 import torchvision
+
 torchvision.disable_beta_transforms_warning()
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -177,7 +179,7 @@ class NuScenesPointCloud:
         panoptic = panoptic.type(torch.long)
         points[0] = points[0] / 0.25
         points[1] = points[1] / 0.25
-        #points[2] = points[2] * (32 / 20)
+        # points[2] = points[2] * (32 / 20)
         voxel = cls._pointcloud_to_voxelgrid(points, panoptic)
 
         return points, panoptic, voxel[None, ...]
@@ -262,7 +264,7 @@ class NuScenesPointCloud:
         cls, metadata: dict, binary: bool = True, scale_factor: Optional[float] = None, rotate: Optional[Tensor] = None
     ) -> "NuScenesPointCloud":
         sample_token = metadata["sample_token"]
-        #location, panoptic, occupancy = cls._load_from_raw(metadata)
+        # location, panoptic, occupancy = cls._load_from_raw(metadata)
         rotation = metadata["rotation"]
         rotation = torch.from_numpy(rotation).to(torch.float32).unsqueeze(0)
         rotation = roma.quat_wxyz_to_xyzw(rotation)

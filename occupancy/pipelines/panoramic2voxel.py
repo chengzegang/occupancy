@@ -295,12 +295,6 @@ class LinearCategoricalDeformation(nn.Module):
         self.left_proj = nn.Linear(out_features, deformative_size)
         self.attn_norm = RMSNorm(hidden_size=out_features)
         self.attention = Attention(hidden_size=out_features, num_heads=out_features // 64, head_size=64)
-        self.mlp_norm = RMSNorm(hidden_size=out_features)
-        self.mlp = SwiGLU(
-            in_features=out_features,
-            hidden_features=out_features * 8 // 3,
-            out_features=out_features,
-        )
         self.out_norm = RMSNorm(hidden_size=out_features)
         self.out_proj = nn.Linear(out_features, out_features)
 
@@ -328,16 +322,44 @@ class LinearCategoricalDeformation(nn.Module):
         logits = self.attention(logits)
         logits = logits + residual
 
-        residual = logits
-        logits = self.mlp_norm(logits)
-        logits = self.mlp(logits)
-        logits = logits + residual
-        
         logits = self.out_norm(logits)
         logits = F.silu(logits)
         logits = self.out_proj(logits)
 
         return logits
+
+
+class CrossAttentionLayer(nn.Module):
+    def __init__(self, hidden_size: int, num_heads: int, head_size: int, max_seq_length: int = 10000):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
+        self.head_size = head_size
+
+        self.ln1 = RMSNorm(hidden_size)
+        self.cross_attn = CrossAttention(hidden_size, num_heads, head_size, max_seq_length)
+
+        self.ln2 = RMSNorm(hidden_size)
+        self.mlp = SwiGLU(hidden_size, hidden_size * 8 // 3, hidden_size)
+
+    def forward(
+        self,
+        input_embeds: Tensor,
+        condition_embeds: Tensor,
+        attention_mask: Optional[Tensor] = None,
+    ) -> Tensor:
+
+        residual = input_embeds
+        input_embeds = self.ln1(input_embeds)
+        input_embeds = self.cross_attn(input_embeds, condition_embeds, attention_mask)
+        input_embeds = input_embeds + residual
+
+        residual = input_embeds
+        input_embeds = self.ln2(input_embeds)
+        input_embeds = self.mlp(input_embeds)
+        input_embeds = input_embeds + residual
+
+        return input_embeds
 
 
 from collections import defaultdict
@@ -362,7 +384,7 @@ class BEVLinearCategoricalDeformation(nn.Module):
             ]
         )
         self.attentions = nn.ModuleList(
-            [ConditionalDecoderLayer(hidden_size, hidden_size // 64, 64) for _ in range(self.num_layers - 1)]
+            [CrossAttentionLayer(hidden_size, hidden_size // 64, 64) for _ in range(self.num_layers - 1)]
         )
         self.transformer = Transformer(hidden_size, 8, hidden_size // 64, 64)
         self.out_norm = SpatialRMSNorm(hidden_size)
@@ -476,7 +498,11 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         return pred_occ
 
     def parameters(self, recurse: bool = True) -> Iterator[Parameter]:
-        return chain(self.decoder.deformations.parameters(recurse), self.decoder.attentions.parameters(recurse), self.decoder.transformer.parameters(recurse))
+        return chain(
+            self.decoder.deformations.parameters(recurse),
+            self.decoder.attentions.parameters(recurse),
+            self.decoder.transformer.parameters(recurse),
+        )
 
     def __call__(self, input: MultiViewImageToVoxelPipelineInput) -> MultiViewImageToVoxelPipelineOutput:
         return super().__call__(input)
