@@ -301,6 +301,8 @@ class LinearCategoricalDeformation(nn.Module):
             hidden_features=out_features * 8 // 3,
             out_features=out_features,
         )
+        self.out_norm = RMSNorm(hidden_size=out_features)
+        self.out_proj = nn.Linear(out_features, out_features)
 
     def forward(self, input_embeds: Tensor) -> Tensor:
         """
@@ -317,7 +319,7 @@ class LinearCategoricalDeformation(nn.Module):
         input_embeds = self.gate(input_embeds)
         left_weight = self.left_proj(input_embeds)
         left_weight = left_weight / (
-            torch.norm(left_weight, p=2, dim=(-1, -2)) / (left_weight.shape[-1] / left_weight.shape[-2])
+            torch.norm(left_weight, p=2, dim=(-1, -2), keepdim=True) / (left_weight.shape[-1] / left_weight.shape[-2])
         )
         logits = torch.einsum("...ij,...ik->...kj", input_embeds, left_weight)
 
@@ -330,6 +332,10 @@ class LinearCategoricalDeformation(nn.Module):
         logits = self.mlp_norm(logits)
         logits = self.mlp(logits)
         logits = logits + residual
+        
+        logits = self.out_norm(logits)
+        logits = F.silu(logits)
+        logits = self.out_proj(logits)
 
         return logits
 
@@ -359,6 +365,9 @@ class BEVLinearCategoricalDeformation(nn.Module):
             [ConditionalDecoderLayer(hidden_size, hidden_size // 64, 64) for _ in range(self.num_layers - 1)]
         )
         self.transformer = Transformer(hidden_size, 8, hidden_size // 64, 64)
+        self.out_norm = SpatialRMSNorm(hidden_size)
+        self.nonlinear = nn.SiLU(True)
+        self.out_proj = nn.Conv3d(hidden_size, 4, 1)
 
     def _bev_linear_categorical_deformation_hook(self, module, input, output):
         block_index = getattr(module, "_block_index")
@@ -377,36 +386,13 @@ class BEVLinearCategoricalDeformation(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         for i in x.unbind(1):
             self.feature_extrator(i)
-        feat = self._last_feats.pop()
+        feat = self._last_feats[-1]
         feat = self.transformer(feat)
-        feat = feat.transpose(-1, -2).view_as(feat.shape[0], -1, 32, 32, 4)
+        feat = feat.transpose(-1, -2).view(feat.shape[0], -1, 32, 32, 4)
+        feat = self.out_norm(feat)
+        feat = self.nonlinear(feat)
+        feat = self.out_proj(feat)
         return feat
-
-
-class MultiViewImageToVoxelModel(nn.Module):
-    def __init__(
-        self,
-        in_channels: int = 4,
-        out_channels: int = 16,
-    ):
-        super().__init__()
-        self.hidden_size = 768
-        self.in_channels = in_channels
-        self.deformation = LinearCategoricalDeformation(self.hidden_size, 32 * 32 * 4)
-        self.transformer = Transformer(self.hidden_size, 16, self.hidden_size // 64, 64)
-        self.out_norm = RMSNorm(self.hidden_size)
-        self.out_proj = nn.Linear(self.hidden_size, out_channels)
-
-    def forward(self, multiview: Tensor, out_shape: Tuple[int, int, int]) -> Tensor:
-        multiview = torch.cat(multiview.unbind(1), dim=-1)
-
-        latent = self.deformation(multiview.flatten(2).transpose(-1, -2))
-        latent = self.transformer(latent)
-        latent = self.out_norm(latent)
-        latent = F.silu(latent)
-        latent = self.out_proj(latent)
-        output = latent.transpose(-1, -2).view_as(latent.shape[0], -1, *out_shape)
-        return output
 
 
 def build_kernel(size: int, sigma: float) -> torch.Tensor:
@@ -461,10 +447,6 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         dinov2.requires_grad_(False)
         self.decoder = BEVLinearCategoricalDeformation(dinov2)
 
-        # self.decoder = MultiViewImageToVoxelModel(
-        #    4,
-        #    self.voxel_encoder_latent_dim,
-        # )
         self.voxel_autoencoderkl.requires_grad_(False)
 
     def decode(self, images) -> Tensor:
@@ -494,7 +476,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
         return pred_occ
 
     def parameters(self, recurse: bool = True) -> Iterator[Parameter]:
-        return chain(self.decoder.parameters(recurse), self.bypass.parameters(recurse))
+        return chain(self.decoder.deformations.parameters(recurse), self.decoder.attentions.parameters(recurse), self.decoder.transformer.parameters(recurse))
 
     def __call__(self, input: MultiViewImageToVoxelPipelineInput) -> MultiViewImageToVoxelPipelineOutput:
         return super().__call__(input)
@@ -515,7 +497,7 @@ class MultiViewImageToVoxelPipeline(nn.Module):
             loss = F.binary_cross_entropy_with_logits(
                 pred_occ,
                 input.occupancy,
-                pos_weight=torch.tensor(4, device=pred_occ.device, dtype=pred_occ.dtype),
+                pos_weight=torch.tensor(3, device=pred_occ.device, dtype=pred_occ.dtype),
                 reduction="none",
             )
         else:
@@ -590,8 +572,6 @@ def config_model(args):
     model.voxel_autoencoderkl.decoder = torch.jit.script(model.voxel_autoencoderkl.decoder)
     model.decoder.feature_extrator.requires_grad_(False)
     model.voxel_autoencoderkl.requires_grad_(False)
-    # model.image_autoencoderkl.requires_grad_(False)
-    # model.decoder.positional_embeds.requires_grad_(False)
     return model, MultiViewImageToVoxelPipelineInput.from_nuscenes_dataset_item
 
 
